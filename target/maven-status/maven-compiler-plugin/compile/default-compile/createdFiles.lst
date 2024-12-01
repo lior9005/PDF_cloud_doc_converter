@@ -1,1 +1,5 @@
-PdfProcessor.class
+App.class
+Worker.class
+AWS$Label.class
+Manager.class
+AWS.class

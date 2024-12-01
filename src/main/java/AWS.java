@@ -2,7 +2,6 @@ import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
-import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.ec2.model.*;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
@@ -22,29 +21,30 @@ import software.amazon.awssdk.services.sqs.model.QueueDoesNotExistException;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sqs.model.SqsException;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class AWS {
 
-    public final String IMAGE_AMI = "ami-08902199a8aa0bc09";
+    public final String IMAGE_AMI = "ami-054c83d4f87978fed";
     public Region region1 = Region.US_WEST_2;
     private final S3Client s3;
     private final SqsClient sqs;
     private final Ec2Client ec2;
-    private final String bucketName;
+    private  final String INPUT_BUCKET = "outputBucket"; 
+    private  final String OUTPUT_BUCKET = "inputBucket"; 
+
     private static AWS instance = null;
 
     private AWS() {
         s3 = S3Client.builder().region(region1).build();
         sqs = SqsClient.builder().region(region1).build();
         ec2 = Ec2Client.builder().region(region1).build();
-        bucketName = "my-bucket";
     }
 
     public static AWS getInstance() {
@@ -69,7 +69,7 @@ public class AWS {
         // Launch the instance
         try {
             ec2.runInstances(runInstancesRequest);
-        } catch (InterruptedException ignored) {
+        } catch (Ec2Exception ignored) {
         }
     }
 
@@ -85,9 +85,9 @@ public class AWS {
 
         // Launch the instance
         try {
-            ec2.runInstances(runInstancesRequest);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            return ec2.runInstances(runInstancesRequest);
+        } catch (Ec2Exception e) {
+            throw e;
         }
     }
 
@@ -97,7 +97,7 @@ public class AWS {
         DescribeInstancesResponse describeInstancesResponse = null;
         try {
             describeInstancesResponse = ec2.describeInstances(describeInstancesRequest);
-        } catch (InterruptedException ignored) {
+        } catch (Ec2Exception ignored) {
         }
 
         return describeInstancesResponse.reservations().stream()
@@ -129,8 +129,8 @@ public class AWS {
         // Terminate the instance
         try {
             ec2.terminateInstances(terminateRequest);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        } catch (Ec2Exception e) {
+            throw e;
         }
 
         System.out.println("Terminated instance: " + instanceId);
@@ -139,7 +139,7 @@ public class AWS {
 
     ////////////////////////////// S3
 
-    public String uploadFileToS3(String keyPath, File file) throws Exception {
+    public String uploadFileToS3(String keyPath, File file, String bucketName) throws Exception {
         System.out.printf("Start upload: %s, to S3\n", file.getName());
 
         PutObjectRequest req =
@@ -154,7 +154,7 @@ public class AWS {
         return "s3://" + bucketName + "/" + keyPath;
     }
 
-    public void downloadFileFromS3(String keyPath, File outputFile) {
+    public void downloadFileFromS3(String keyPath, File outputFile, String bucketName) {
         System.out.println("Start downloading file " + keyPath + " to " + outputFile.getPath());
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
@@ -163,16 +163,23 @@ public class AWS {
                 .build();
 
         try {
+            // Attempt to retrieve the object bytes from S3
             ResponseBytes<GetObjectResponse> objectBytes = s3.getObjectAsBytes(getObjectRequest);
             byte[] data = objectBytes.asByteArray();
 
-            // Write the data to a local file.
-            OutputStream os = new FileOutputStream(outputFile);
-            os.write(data);
-            System.out.println("Successfully obtained bytes from an S3 object");
-            os.close();
-        } catch (InterruptedException ignored) {
+            // Write the data to a local file
+            try (OutputStream os = new FileOutputStream(outputFile)) {
+                os.write(data);
+                System.out.println("Successfully obtained bytes from an S3 object");
+            } catch (IOException e) {
+                System.err.println("Error writing to file: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } catch (S3Exception e) {
+            System.err.println("Error getting data from s3" + e.getMessage());
+            e.printStackTrace();
         }
+
     }
 
     public void createBucketIfNotExists(String bucketName) {
@@ -204,7 +211,7 @@ public class AWS {
         ListObjectsV2Iterable listRes = null;
         try {
             listRes = s3.listObjectsV2Paginator(listReq);
-        } catch (InterruptedException ignored) {
+        } catch (S3Exception ignored) {
         }
         // Process response pages
         listRes.stream()
@@ -218,7 +225,7 @@ public class AWS {
         DeleteBucketRequest deleteBucketRequest = DeleteBucketRequest.builder().bucket(bucketName).build();
         try {
             s3.deleteBucket(deleteBucketRequest);
-        } catch (InterruptedException ignored) {
+        } catch (S3Exception ignored) {
         }
     }
 
@@ -241,7 +248,7 @@ public class AWS {
 
         try {
             s3.deleteObjects(multiObjectDeleteRequest);
-        } catch (InterruptedException ignored) {
+        } catch (S3Exception ignored) {
         }
     }
 
@@ -290,7 +297,7 @@ public String createQueue(String queueName) {
 
         try {
             sqs.deleteQueue(req);
-        } catch (InterruptedException ignored) {
+        } catch (SqsException ignored) {
         }
     }
 
@@ -301,7 +308,8 @@ public String createQueue(String queueName) {
         String queueUrl = null;
         try {
             queueUrl = sqs.getQueueUrl(getQueueRequest).queueUrl();
-        } catch (InterruptedException ignored) {
+        } catch (SqsException e) {
+            System.err.println(e.awsErrorDetails().errorMessage());
         }
         System.out.println("Queue URL: " + queueUrl);
         return queueUrl;
@@ -320,7 +328,7 @@ public String createQueue(String queueName) {
         GetQueueAttributesResponse queueAttributesResponse = null;
         try {
             queueAttributesResponse = sqs.getQueueAttributes(getQueueAttributesRequest);
-        } catch (InterruptedException ignored) {
+        } catch (SqsException ignored) {
         }
         Map<QueueAttributeName, String> attributes = queueAttributesResponse.attributes();
 
@@ -369,6 +377,7 @@ public String createQueue(String queueName) {
 
                 sqs.sendMessage(sendMessageRequest);
     }
+
     ///////////////////////
 
     public enum Label {

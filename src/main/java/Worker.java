@@ -1,34 +1,22 @@
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
-
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import javax.imageio.ImageIO;
-
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.sqs.SqsClient;
-import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
-import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
-import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
-import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 import software.amazon.awssdk.services.sqs.model.Message;
-
 
 
 public class Worker {
 
     AWS aws = AWS.getInstance();
-    SqsClient sqsClient = SqsClient.create();
-    S3Client s3Client = S3Client.create();
-
 
     public static void main(String[] args) {
         Worker worker = new Worker();
         // Get the queue URL from the command line arguments
-        worker.run(args[--]);     
+        worker.run(args[0], args[1], args[2], args[3]);  // incomingQueueUrl, outgoingQueueUrl, terminateQueueUrl, s3BucketName   
     }
 
     public void run(String incomingQueueUrl, String outgoingQueueUrl, String terminateQueueUrl, String s3BucketName) {
@@ -135,7 +123,7 @@ public class Worker {
     
             // Attempt to upload the result to S3 (fail silently if there's an error)
             try {
-                aws.uploadFileToS3(outputKey, tempFile);
+                aws.uploadFileToS3(outputKey, tempFile, "outputBucket");
             } catch (Exception e) {}
     
         } catch (IOException | IllegalArgumentException e) {

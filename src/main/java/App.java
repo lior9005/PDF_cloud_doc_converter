@@ -4,45 +4,43 @@ import software.amazon.awssdk.services.ec2.model.DescribeInstancesResponse;
 import software.amazon.awssdk.services.ec2.model.Filter;
 import software.amazon.awssdk.services.ec2.model.InstanceStateName;
 import software.amazon.awssdk.services.ec2.model.InstanceType;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.GetObjectResponse;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
 import software.amazon.awssdk.services.sqs.model.*;
 import java.io.File;
-import java.nio.file.Paths;
+import java.util.UUID;
+
 
 public class App {
     final static AWS aws = AWS.getInstance();
-    private static final String fileUploadQueueName = "fileUploadQueue";
-    private static final String managerWorkStatusQueueName = "managerWorkStatusQueue";
+    private static final String appToManagerQueue = "appToManagerQueue";
+    private static final String managerToAppQueue = "managerToAppQueue";
     Ec2Client ec2Client = Ec2Client.create();
     private String managerInstanceId;
+    private String id = UUID.randomUUID().toString();
 
     public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate, optional)]
         App app = new App();
         String inFilePath = args[0];
         String outFilePath = args[1];
         String tasksPerWorker = args[2];
-        String terminate = args[3];
-
         try {
             // Setting up the necessary services
             app.setup();
             // Upload a file to S3 and send a message to SQS
-            app.uploadFileAndSendMessage(inFilePath, tasksPerWorker);
+            app.uploadFileAndSendMessage(inFilePath, tasksPerWorker, app.id);
 
             // Poll the manager work status queue
-            app.pollManagerQueueAndDownloadFile(inFilePath, outFilePath);
+            app.pollManagerQueueAndDownloadFile(inFilePath, outFilePath, app.id);
         } catch (Exception e) {
             e.printStackTrace();
         }
-        if(terminate.equals("-t")) {
-            aws.terminateInstance(app.managerInstanceId);
+        if(args.length > 3 && args[3].equals("-t")) {
+            aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), "terminate");
         }
     }
 
     public void setup() {
-        aws.createBucketIfNotExists(aws.bucketName);
+        aws.createBucketIfNotExists("input-bucket");
         checkAndStartManagerNode();
         // Initialize SQS queues
         initializeQueues();
@@ -83,13 +81,13 @@ public class App {
     // Modify the startManagerNode method
     public void startManagerNode() {
         try {
-            String ami = aws.IMAGE_AMI;
             InstanceType instanceType = InstanceType.T2_MICRO;
-            String userDataScript = "#!/bin/bash\n# Manager node initialization script";
+            String userDataScript = "java -cp /home/ec2-user/Ass_1-1.0.jar Manager";
     
             // Launch manager node with a specific AMI and instance type
-            aws.runInstanceFromAmiWithScript(ami, instanceType, 1, 1, userDataScript);
-            System.out.println("Manager node started.");
+            RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, instanceType, 1, 1, userDataScript);
+            response.instances().forEach(instance -> managerInstanceId = instance.instanceId()); //just one instance
+            System.out.println("Manager node started with ID: " + managerInstanceId);
     
         } catch (Exception e) {
             e.printStackTrace();
@@ -97,7 +95,7 @@ public class App {
         }
     }
 
-    public void uploadFileAndSendMessage(String filePath, String tasksPerWorker) {
+    public void uploadFileAndSendMessage(String filePath, String tasksPerWorker, String appId) {
         try {
 
             File file = new File(filePath);
@@ -105,11 +103,11 @@ public class App {
                 throw new IllegalArgumentException("File does not exist.");
             }
             // Upload file to S3
-            String s3Path = aws.uploadFileToS3(filePath, file);
-            System.out.println("File uploaded to S3 at: " + s3Path);
+            String s3FileLocation = aws.uploadFileToS3(filePath, file, "inputBucket");
+            System.out.println("File uploaded to S3 at: " + s3FileLocation);
 
             // Send file location to the file upload queue
-            aws.sendSqsMessage(aws.getQueueUrl(fileUploadQueueName), s3Path + "\t" + tasksPerWorker);
+            aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), appId + "\t" + s3FileLocation + "\t" + tasksPerWorker);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -119,19 +117,19 @@ public class App {
 
     // Method to initialize the SQS queues if needed
     public void initializeQueues() {
-        aws.createQueue(fileUploadQueueName);
-        aws.createQueue(managerWorkStatusQueueName);
+        aws.createQueue(appToManagerQueue);
+        aws.createQueue(managerToAppQueue);
     }
 
     // Poll the manager work status queue and download the file once it is processed
-    public void pollManagerQueueAndDownloadFile(String inFilePath, String outFilePath) {
+    public void pollManagerQueueAndDownloadFile(String inFilePath, String outFilePath, String appId) {
         boolean downloadCompleted = false;
 
         // Poll the queue for messages in a loop
         while (!downloadCompleted) {
             try {
                 // Receive message from the manager work status queue
-                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(managerWorkStatusQueueName), 1);
+                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(managerToAppQueue), 0);
 
                 if (!msg.body().isEmpty()) {
                     // Extract the message and check if it matches the uploaded file path
@@ -141,12 +139,12 @@ public class App {
                     if (message.equals(inFilePath)) {
                         File outputFile = new File(outFilePath);
                         // If the message contains the file, download it from S3
-                        aws.downloadFileFromS3(message, outputFile);
+                        aws.downloadFileFromS3(message, outputFile, "outputBucket");
                         downloadCompleted = true;
                     }
 
                     // Delete the message from the queue after processing
-                    aws.deleteMessageFromQueue(aws.getQueueUrl(managerWorkStatusQueueName),
+                    aws.deleteMessageFromQueue(aws.getQueueUrl(managerToAppQueue),
                             msg.receiptHandle());
                 }
             } catch (Exception e) {
