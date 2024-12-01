@@ -1,3 +1,4 @@
+
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.regions.Region;
@@ -32,13 +33,10 @@ import java.util.*;
 public class AWS {
 
     public final String IMAGE_AMI = "ami-054c83d4f87978fed";
-    public Region region1 = Region.US_WEST_2;
+    public Region region1 = Region.US_EAST_1;
     private final S3Client s3;
     private final SqsClient sqs;
     private final Ec2Client ec2;
-    private  final String INPUT_BUCKET = "outputBucket"; 
-    private  final String OUTPUT_BUCKET = "inputBucket"; 
-
     private static AWS instance = null;
 
     private AWS() {
@@ -77,6 +75,7 @@ public class AWS {
         RunInstancesRequest runInstancesRequest = RunInstancesRequest.builder()
                 .imageId(ami)
                 .instanceType(instanceType)
+                .iamInstanceProfile(iam -> iam.name("LabRole "))
                 .minCount(min)
                 .maxCount(max)
                 .userData(Base64.getEncoder().encodeToString(script.getBytes()))

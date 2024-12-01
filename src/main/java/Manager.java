@@ -43,7 +43,7 @@ public class Manager {
                 Message message = aws.getMessageFromQueue(jobQueueUrl, 0);
 
                 if (message != null) {
-                    if (message.body().equalsIgnoreCase("Terminate")) {
+                    if (message.body().equalsIgnoreCase("Terminate")) { /////////////////////////////
                         handleTerminateMessage();
                         break;
                     }
@@ -51,7 +51,7 @@ public class Manager {
                 }
                 Message doneMessage = aws.getMessageFromQueue(workersDoneQueueUrl, 0);
                 if (message != null) {
-                    String[] parts = doneMessage.body().split("\t", 2);
+                    String[] parts = doneMessage.body().split("\t");
                     appendToHtmlFile(parts[0], parts[1]);  // Update HTML with worker results.
                     aws.deleteMessageFromQueue(workersDoneQueueUrl, doneMessage.receiptHandle());
                     fileProcessingCount.replace(parts[0], fileProcessingCount.get(parts[0]) - 1);
@@ -157,7 +157,6 @@ public class Manager {
         }
     }
 
-    //finished
     private void handleTerminateMessage() {
         System.out.println("Received termination request. Shutting down...");
         int currentWorkerCount = 0;
@@ -184,7 +183,7 @@ public class Manager {
             e.printStackTrace();
         }
     }
-    //finished
+
     private void terminateAllWorkers() throws InterruptedException{
         List<Instance> workers = aws.getAllInstancesWithLabel(AWS.Label.Worker);
         for(Instance instance : workers){
@@ -200,8 +199,9 @@ public class Manager {
 
             if (currentWorkerCount < numWorkers) {
                 int workersToLaunch = numWorkers - currentWorkerCount;
+                String startupScript = "wget https://edenuploadbucket.s3.us-east-1.amazonaws.com/Ass_1-1.0.jar &&" +
+                "java -cp /home/ec2-user/Ass_1-1.0.jar Worker"; 
                 for (int i = 0; i < workersToLaunch; i++) {
-                    String startupScript = "java -cp /home/ec2-user/Ass_1-1.0.jar Worker"; 
                     aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, startupScript);
                 }
             }

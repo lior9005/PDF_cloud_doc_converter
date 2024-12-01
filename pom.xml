@@ -8,40 +8,23 @@
     <artifactId>Ass_1</artifactId>
     <version>1.0</version>
 
-    <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
-
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>software.amazon.awssdk</groupId>
-                <artifactId>bom</artifactId>
-                <version>2.18.16</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
-
     <dependencies>
-
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
-            <artifactId>sqs</artifactId>
+            <artifactId>ec2</artifactId>
+            <version>2.28.18</version>
         </dependency>
 
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
+            <version>2.28.18</version>
         </dependency>
 
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
-            <artifactId>ec2</artifactId>
+            <artifactId>sqs</artifactId>
+            <version>2.28.18</version>
         </dependency>
 
         <dependency>
@@ -49,7 +32,35 @@
             <artifactId>pdfbox</artifactId>
             <version>2.0.24</version>
         </dependency>
-
     </dependencies>
     
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-assembly-plugin</artifactId>
+            <version>3.3.0</version>
+            <executions>
+                <execution>
+                    <phase>package</phase>
+                    <goals>
+                        <goal>single</goal>
+                    </goals>
+                    <configuration>
+                        <descriptorRefs>
+                            <descriptorRef>jar-with-dependencies</descriptorRef>
+                        </descriptorRefs>
+                        <!-- Add Main-Class to the manifest -->
+                        <archive>
+                            <manifestEntries>
+                                <Main-Class>App</Main-Class>
+                            </manifestEntries>
+                        </archive>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+    </plugins>
+</build>
+
 </project>

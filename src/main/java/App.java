@@ -19,6 +19,9 @@ public class App {
     private String id = UUID.randomUUID().toString();
 
     public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate, optional)]
+        System.out.println("Starting App...");
+        System.out.println("AWS Access Key ID: " + System.getenv("AWS_ACCESS_KEY_ID"));
+        System.out.println("AWS Secret Access Key: " + System.getenv("AWS_SECRET_ACCESS_KEY"));
         App app = new App();
         String inFilePath = args[0];
         String outFilePath = args[1];
@@ -82,7 +85,8 @@ public class App {
     public void startManagerNode() {
         try {
             InstanceType instanceType = InstanceType.T2_MICRO;
-            String userDataScript = "java -cp /home/ec2-user/Ass_1-1.0.jar Manager";
+            String userDataScript = "wget https://edenuploadbucket.s3.us-east-1.amazonaws.com/Ass_1-1.0.jar && " + 
+            "java -cp /home/ec2-user/Ass_1-1.0.jar Manager";
     
             // Launch manager node with a specific AMI and instance type
             RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, instanceType, 1, 1, userDataScript);
@@ -107,7 +111,9 @@ public class App {
             System.out.println("File uploaded to S3 at: " + s3FileLocation);
 
             // Send file location to the file upload queue
-            aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), appId + "\t" + s3FileLocation + "\t" + tasksPerWorker);
+            aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), appId + "\t" + 
+                                                                    s3FileLocation + "\t" + 
+                                                                        tasksPerWorker);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -132,14 +138,13 @@ public class App {
                 Message msg = aws.getMessageFromQueue(aws.getQueueUrl(managerToAppQueue), 0);
 
                 if (!msg.body().isEmpty()) {
-                    // Extract the message and check if it matches the uploaded file path
-                    String message = msg.body();
-
-                    // Check if the message contains the filename or file path you uploaded
-                    if (message.equals(inFilePath)) {
+                    String[] msgParts = msg.body().split("\t");
+                    String message = msgParts[0];
+                    // Check if the message contains the id
+                    if (message.equals(appId)) {
                         File outputFile = new File(outFilePath);
                         // If the message contains the file, download it from S3
-                        aws.downloadFileFromS3(message, outputFile, "outputBucket");
+                        aws.downloadFileFromS3(msgParts[2], outputFile, "outputBucket");
                         downloadCompleted = true;
                     }
 
