@@ -8,16 +8,15 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
 
 public class Manager {
 
-
     private static final AWS aws = AWS.getInstance();
     private ExecutorService executorService; 
     private Map<String, Integer> fileProcessingCount = new HashMap<>();
+    private Map<String, String> urlMap = new HashMap<>();
 
     public Manager() {
         this.executorService = Executors.newFixedThreadPool(2);
@@ -28,13 +27,15 @@ public class Manager {
         manager.run();
     }
 
+    //finished
     public void run() {
         try {
             String jobQueueUrl = aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE);
             String workersDoneQueueUrl = aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE);
+
             while (true) {
                 // Step 1: Check the job queue for incoming messages
-                Message message = aws.getMessageFromQueue(jobQueueUrl, 0);
+                Message message = aws.getMessageFromQueue(aws.getQueueUrl(appToManagerQueue), 0);
 
                 if (message != null) {
                     if (message.body().equalsIgnoreCase("Terminate")) { /////////////////////////////
@@ -43,12 +44,17 @@ public class Manager {
                     }
                     submitMessageTask(message);
                 }
-                Message doneMessage = aws.getMessageFromQueue(workersDoneQueueUrl, 0);
+                Message doneMessage = aws.getMessageFromQueue(aws.getQueueUrl(workerToManagerQueue), 0);
                 if (message != null) {
-                    String[] parts = doneMessage.body().split("\t");
-                    appendToHtmlFile(parts[0], parts[1]);  // Update HTML with worker results.
-                    aws.deleteMessageFromQueue(workersDoneQueueUrl, doneMessage.receiptHandle());
+                    //divide message to outfileurl : actualmessage
+                    String[] parts = doneMessage.body().split("\t", 2);
+                    //add message to the corresponding file
+                    appendToFile(parts);
+                    //delete message from queue so the message will not be written again
+                    aws.deleteMessageFromQueue(aws.getQueueUrl(workerToManagerQueue), doneMessage.receiptHandle());
+                    //update the map in order to know how many tasks left for file
                     fileProcessingCount.replace(parts[0], fileProcessingCount.get(parts[0]) - 1);
+                    //if all tasks completed, send summaryfile to app queue
                     if(fileProcessingCount.get(parts[0]) == 0){
                         sendSummaryFile(parts[0]);
                         fileProcessingCount.remove(parts[0]);
@@ -60,38 +66,42 @@ public class Manager {
         }
     }
 
+    //finished
     private void submitMessageTask(Message message){
         executorService.submit(() -> {
-            String[] msgDetails = message.body().split("\t");
-            String fileLocation = msgDetails[1];
-            int workerCount = Integer.parseInt(msgDetails[2]);
+            try{
+                String[] msgDetails = message.body().split("\t");
+                String inputfile = msgDetails[0];
+                int workerCount = Integer.parseInt(msgDetails[1]);
 
-            // Download the file and send tasks to the worker job queue.
-            File inputFile = new File("inputFile");
-            aws.downloadFileFromS3(fileLocation, inputFile, Resources.INPUT_BUCKET);
+                // Download the file and send tasks to the worker job queue.
+                File temp = new File("tempFile");
+                aws.downloadFileFromS3(inputfile, temp, INPUT_BUCKET);
 
-            File htmlFile = createEmptyHtmlFile(fileLocation);
-            List<String> messages = new ArrayList<>();
-            try {
-                messages = parseInputFile(inputFile, htmlFile.getName());
-            } catch (IOException e) {
+                File outputFile = new File(inputfile + "TempOutput");
+                List<String> messages = new ArrayList<>();
+                messages = parseInputFile(temp, outputFile.getName());
+                fileProcessingCount.put(outputFile.getName(), messages.size());
+                urlMap.put(outputFile.getName(), inputfile);
+                
+                // Create worker nodes
+                int numWorkers = Math.min(messages.size()/workerCount, 9);
+                startWorkerNodes(numWorkers);
+
+                // Send tasks to worker queue.
+                sendMessages(messages, managerToWorkerQueue);
+
+                // Delete the job message from the job queue
+                aws.deleteMessageFromQueue(appToManagerQueue, message.receiptHandle());
+            } catch (Exception e) {
+
                 e.printStackTrace();
+                Thread.currentThread().interrupt();
             }
-
-            fileProcessingCount.put(htmlFile.getName(), messages.size());
-            
-            // Create worker nodes
-            int numWorkers = Math.min(messages.size()/workerCount, 9);
-            startWorkerNodes(numWorkers);
-
-            // Send tasks to worker queue.
-            sendMessages(messages, Resources.MANAGER_TO_WORKER_QUEUE);
-
-            // Delete the job message from the job queue
-            aws.deleteMessageFromQueue(Resources.APP_TO_MANAGER_QUEUE, message.receiptHandle());
         });
     }
-
+    
+    //finished
     private void sendMessages(List<String> messages, String q) {
         try {
             // Loop through each string in the list and send it as a separate message to the SQS queue
@@ -101,76 +111,59 @@ public class Manager {
             }
         } catch (Exception e) {
             e.printStackTrace();
+            Thread.currentThread().interrupt();
         }
     }
+    
+    //finished
+    public void appendToFile(String[] parts) {
+        // Create a File object for the HTML file
+        File summaryFile = new File(parts[0]);
 
-    public static void appendToHtmlFile(String fileName, String contentToAdd) {
-            // Create a File object for the HTML file
-            File htmlFile = new File(fileName);
-
-            // Use BufferedWriter to append content to the file
-            try (BufferedWriter writer = new BufferedWriter(new FileWriter(htmlFile, true))) {
-                // Append the content at the end of the file
-                writer.write(contentToAdd);
-                writer.newLine();  // Optionally add a new line after the content
-            } catch (IOException e) {
-                e.printStackTrace();  // Handle potential IO exceptions
-            }
+        // Use BufferedWriter to append content to the file
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(summaryFile, true))) {
+            // Append the content at the end of the file
+            writer.write(parts[1]);
+            writer.newLine();  // Optionally add a new line after the content
+        } catch (IOException e) {
+            e.printStackTrace();  // Handle potential IO exceptions
         }
-
-    public static void sendSummaryFile(String fileName) {
+    }
+    
+    //finished
+    public void sendSummaryFile(String fileName) {
         try{
             // Create a File object for the HTML file
-            File htmlFile = new File(fileName);
+            File summaryS3File = new File(fileName);
+            String originalFileUrl = urlMap.get(fileName);
             //Upload the summary to S3
-            String summaryFilePath = aws.uploadFileToS3(fileName, htmlFile, Resources.OUTPUT_BUCKET);
+            String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, Resources.OUTPUT_BUCKET);
             // Step 10: Send a message to the done queue: <originalFileName> \t <newFilePath>
-            aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), fileName.replace("output.html", ".pdf")+ '\t' + summaryFilePath);
+            aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), originalFileUrl + '\t' + summaryFilePath);
         } catch (Exception e) {
             e.printStackTrace();  // Handle potential IO exceptions
         }
     }
 
-    // Create an empty HTML file with the same name as the PDF, appending "output"
-    private File createEmptyHtmlFile(String fileLocation) {
-        String fileName = extractFileNameFromUrl(fileLocation); // Extract the filename from the URL
-        String htmlFileName = fileName.replace(".pdf", "output.html"); // Replace .pdf with output.html
-        File htmlFile = new File(htmlFileName);
-        return htmlFile;
-    }
-
-    // Extract the filename from the URL (without the path)
-    private String extractFileNameFromUrl(String url) {
-        try {
-            URL parsedUrl = new URL(url);
-            String path = parsedUrl.getPath();
-            return Paths.get(path).getFileName().toString(); // Get the file name from the path
-        } catch (Exception e) {
-            e.printStackTrace();
-            return "unknown_filename.pdf"; // Default fallback name if URL parsing fails
-        }
-    }
-
+    //finished
     private void handleTerminateMessage() {
         System.out.println("Received termination request. Shutting down...");
-        int currentWorkerCount = 0;
+        executorService.shutdownNow();
         try {
-            currentWorkerCount = aws.getAllInstancesWithLabel(AWS.Label.Worker).size();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-            Thread.currentThread().interrupt(); // Restore interrupted status
-        }
-        List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
-        sendMessages(terminateMessages, Resources.TERMINATE_QUEUE);
-        try {
+            int currentWorkerCount = aws.getAllInstancesWithLabel(AWS.Label.Worker).size();
+            System.out.println("There are " + currentWorkerCount + "workers to terminate");
+            List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
+            sendMessages(terminateMessages, terminateQueue);
             while (true) {
                 if (aws.getQueueSize(Resources.TERMINATE_QUEUE) == 0) {
                     System.out.println("Terminate Queue is empty. Terminating all workers...");
                     terminateAllWorkers();
+                    System.out.println("Number of workers alive: " + aws.getAllInstancesWithLabel(AWS.Label.Worker).size());
+                    System.out.println("Terminating Manager...");
                     aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager).get(0).instanceId());
                     break;
                 }
-                System.out.println("Waiting for workers to finish their current jobs. Waiting...");
+                System.out.println("Waiting for " + aws.getQueueSize(terminateQueue) + "workers to finish their current jobs. Waiting...");
                 Thread.sleep(100); // Poll every 0.1 seconds
             }
         } catch (InterruptedException e) {
@@ -201,6 +194,7 @@ public class Manager {
             }
         } catch (Exception e) {
             e.printStackTrace();
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -209,13 +203,8 @@ public class Manager {
         try (BufferedReader reader = Files.newBufferedReader(inputFile.toPath())) {
             String line;
             while ((line = reader.readLine()) != null) {
-                String[] parts = line.split("\\s+"); // Split by whitespace (operation URL)
-                if (parts.length == 2) {
-                    String operation = parts[0]; // First part is the operation
-                    String url = parts[1]; // Second part is the URL
-                    String operationMessage = fileName + '\t' + operation + '\t' + url;
-                    parsedMessages.add(operationMessage); // Add message to list
-                }
+                // Add message to list
+                parsedMessages.add(fileName + '\t' + line);
             }
         }
         return parsedMessages;

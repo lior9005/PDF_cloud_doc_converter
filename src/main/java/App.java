@@ -4,34 +4,51 @@ import software.amazon.awssdk.services.ec2.model.InstanceType;
 import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
 import software.amazon.awssdk.services.sqs.model.*;
 
+import java.io.BufferedReader;
 import java.io.File;
-import java.util.List;
-import java.util.UUID;
+import java.io.FileReader;
+import java.io.PrintWriter;
 
 public class App {
     final static AWS aws = AWS.getInstance();
     private String managerInstanceId;
-    private String id = UUID.randomUUID().toString();
+    private String s3OriginalURL = "";
+    private File summaryFile;
 
     public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate, optional)]
-        System.out.println("Starting App...");
-        App app = new App();
-        String inFilePath = args[0];
-        String outFilePath = args[1];
-        String tasksPerWorker = args[2];
-        try {
-            // Setting up the necessary services
-            app.setup();
-            // Upload a file to S3 and send a message to SQS
-            app.uploadFileAndSendMessage(inFilePath, tasksPerWorker, app.id);
-
-            // Poll the manager work status queue
-            app.pollManagerQueueAndDownloadFile(inFilePath, outFilePath, app.id);
-        } catch (Exception e) {
-            e.printStackTrace();
+        if(args.length < 3) {
+            System.out.println("Invalid start script - missing variables");
         }
-        if(args.length > 3 && args[3].equals("-t")) {
-            aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), "terminate");
+        else{
+            App app = new App();
+            String inFilePath = args[0];
+            String outFilePath = args[1];
+            String tasksPerWorker = args[2];
+            app.summaryFile = new File(outFilePath + ".tmp");
+            try {
+                // Setting up the necessary services
+                app.setup();
+                // Upload a file to S3 and send a message to SQS
+                app.uploadFileToS3(inFilePath);
+
+                // Send file location to the file upload queue. Format: originalfileURL \t n
+                aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), app.s3OriginalURL + "\t" + tasksPerWorker);
+
+                // Poll the manager work status queue
+                app.pollManagerQueueAndDownloadFile();
+
+                // Create an HTML file from the downloaded file
+                app.createHtmlFromDownloadedFile(outFilePath);
+
+                // Delete the temporary downloaded file
+                app.summaryFile.delete();
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            if(args.length > 3 && args[3].equals("-t")) {
+                aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), "terminate");
+            }
         }
     }
 
@@ -88,24 +105,21 @@ public class App {
         }
     }
 
-    public void uploadFileAndSendMessage(String filePath, String tasksPerWorker, String appId) {
+    public void uploadFileToS3(String filePath) {
         try {
             System.out.println("Uploading file");
+
             File file = new File(filePath);
             if (!file.exists()) {
                 throw new IllegalArgumentException("File does not exist.");
             }
             // Upload file to S3
-            String s3FileLocation = aws.uploadFileToS3(filePath, file, Resources.INPUT_BUCKET);
-            System.out.println("File uploaded to S3 at: " + s3FileLocation);
+            s3OriginalURL = aws.uploadFileToS3(filePath, file, "inputBucket");
+            System.out.println("File uploaded to S3 at: " + s3OriginalURL);
 
-            // Send file location to the file upload queue
-            aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), appId + "\t" + 
-                                                                    s3FileLocation + "\t" + 
-                                                                        tasksPerWorker);
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("Error uploading file or sending SQS message.");
+            System.out.println("Error uploading file.");
         }
     }
 
@@ -116,29 +130,36 @@ public class App {
     }
 
     // Poll the manager work status queue and download the file once it is processed
-    public void pollManagerQueueAndDownloadFile(String inFilePath, String outFilePath, String appId) {
+    public void pollManagerQueueAndDownloadFile() {
         boolean downloadCompleted = false;
 
         // Poll the queue for messages in a loop
         while (!downloadCompleted) {
             try {
                 // Receive message from the manager work status queue
-                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), 0);
-
-                if (!msg.body().isEmpty()) {
-                    String[] msgParts = msg.body().split("\t");
-                    String message = msgParts[0];
-                    // Check if the message contains the id
-                    if (message.equals(appId)) {
-                        File outputFile = new File(outFilePath);
-                        // If the message contains the file, download it from S3
-                        aws.downloadFileFromS3(msgParts[2], outputFile, Resources.OUTPUT_BUCKET);
-                        downloadCompleted = true;
+                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(managerToAppQueue), 0);
+                if (msg != null && !msg.body().isEmpty()) {
+                    // Extract the message and check if it matches the uploaded file path
+                    String message = msg.body();
+                    //messageParts[0] = originalURL ; messageParts[1] = summaryfileURL
+                    String[] messageParts = message.split("\t");
+                    if (messageParts[0].equals(s3OriginalURL)) {
+                        if (messageParts.length == 2) {    
+                            // Download the file from the provided S3 URL
+                            aws.downloadFileFromS3(messageParts[1], summaryFile, "outputBucket"); 
+                            // Mark the operation as complete
+                            downloadCompleted = true;
+                            // Delete the message from the queue
+                            aws.deleteMessageFromQueue(aws.getQueueUrl(managerToAppQueue),
+                                    msg.receiptHandle());
+                        } else {
+                            System.out.println("Invalid message format. Skipping...");
+                            aws.releaseMessageToQueue(aws.getQueueUrl(managerToAppQueue), msg.receiptHandle());
+                        }
+                    } else {
+                        // Release the message back to the queue for other apps
+                        aws.releaseMessageToQueue(aws.getQueueUrl(managerToAppQueue), msg.receiptHandle());
                     }
-
-                    // Delete the message from the queue after processing
-                    aws.deleteMessageFromQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE),
-                            msg.receiptHandle());
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -146,5 +167,19 @@ public class App {
             }
         }
     }
+
+    //unfinished - fix how the function makes html file
+    private void createHtmlFromDownloadedFile(String outFilePath) throws Exception {
+        File htmlFile = new File(outFilePath);
+        try (BufferedReader reader = new BufferedReader(new FileReader(summaryFile));
+            PrintWriter writer = new PrintWriter(htmlFile)) {
+            writer.println("<html><body><pre>");
+            String line;
+            while ((line = reader.readLine()) != null) {
+                writer.println(line);
+            }
+            writer.println("</pre></body></html>");
+        }
+}
 
 }
