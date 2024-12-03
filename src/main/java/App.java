@@ -5,9 +5,12 @@ import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
 import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
+import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.file.Files;
 import java.util.List;
 
 public class App {
@@ -33,7 +36,7 @@ public class App {
                 app.uploadFileToS3(inFilePath);
 
                 // Send file location to the file upload queue. Format: originalfileURL \t n
-                aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), app.s3OriginalURL + "\t" + tasksPerWorker);
+                aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), inFilePath + "\t" + tasksPerWorker);
 
                 // Poll the manager work status queue
                 app.pollManagerQueueAndDownloadFile();
@@ -93,8 +96,8 @@ public class App {
         try {
             InstanceType instanceType = InstanceType.T2_MICRO;
             String userDataScript = "#!/bin/bash\n" +
-                                    "wget https://eden-input-test-bucket.s3.us-west-2.amazonaws.com/Ass_1-1.0-jar-with-dependencies.jar\n" +
-                                    "java -cp /home/ec2-user/Ass_1-1.0-jar-with-dependencies.jar Manager";
+                                    "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
+                                    "java -cp Ass_1-1.0-jar-with-dependencies.jar Manager";
     
             // Launch manager node with a specific AMI and instance type
             RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, instanceType, 1, 1, userDataScript);
@@ -177,18 +180,34 @@ public class App {
         }
     }
 
-    //unfinished - fix how the function makes html file
     private void createHtmlFromDownloadedFile(String outFilePath) throws Exception {
         File htmlFile = new File(outFilePath);
-        try (BufferedReader reader = new BufferedReader(new FileReader(summaryFile));
-            PrintWriter writer = new PrintWriter(htmlFile)) {
-            writer.println("<html><body><pre>");
+    
+        // Create a BufferedReader to read the input file
+        try (BufferedReader reader = Files.newBufferedReader(summaryFile.toPath());
+             BufferedWriter writer = Files.newBufferedWriter(htmlFile.toPath())) {
+    
+            writer.write("<!DOCTYPE html>\n<html>\n<body>\n");
+    
             String line;
             while ((line = reader.readLine()) != null) {
-                writer.println(line);
+                String[] parts = line.split("\t");
+                if (parts.length == 3) {
+                    String operation = parts[0];
+                    String oldUrl = parts[1];
+                    String newUrl = parts[2];
+                    
+                    writer.write("<p>" + operation + ": ");
+                    writer.write("<a href='" + oldUrl + "'>" + oldUrl + "</a>");
+                    writer.write(" <a href='" + newUrl + "'>" + newUrl + "</a>\n");
+                }
             }
-            writer.println("</pre></body></html>");
+    
+            writer.write("</body>\n</html>\n");
+            System.out.println("HTML file generated successfully: " + htmlFile.getAbsolutePath());
+    
+        } catch (IOException e) {
+            e.printStackTrace();
         }
-}
-
+    }
 }

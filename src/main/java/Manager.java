@@ -32,17 +32,20 @@ public class Manager {
         try {
             while (true) {
                 // Step 1: Check the job queue for incoming messages
+                System.out.println("checking messages from clients");
                 Message message = aws.getMessageFromQueue(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), 0);
-
+                
                 if (message != null) {
                     if (message.body().equalsIgnoreCase("Terminate")) { /////////////////////////////
+                        System.out.println("terminating...");
                         handleTerminateMessage();
                         break;
                     }
                     submitMessageTask(message);
                 }
+                System.out.println("checking messages from workers");
                 Message doneMessage = aws.getMessageFromQueue(aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE), 0);
-                if (message != null) {
+                if (doneMessage != null) {
                     //divide message to outfileurl : actualmessage
                     String[] parts = doneMessage.body().split("\t", 2);
                     //add message to the corresponding file
@@ -182,10 +185,11 @@ public class Manager {
 
             if (currentWorkerCount < numWorkers) {
                 int workersToLaunch = numWorkers - currentWorkerCount;
-                String startupScript = "wget https://eden-input-test-bucket.s3.us-west-2.amazonaws.com/Ass_1-1.0-jar-with-dependencies.jar && " + 
-            "java -cp /home/ec2-user/Ass_1-1.0-jar-with-dependencies.jar Worker";
+                String userDataScript = "#!/bin/bash\n" +
+                "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
+                "java -cp /home/ec2-user/Ass_1-1.0-jar-with-dependencies.jar Worker";
                 for (int i = 0; i < workersToLaunch; i++) {
-                    RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, startupScript);
+                    RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, userDataScript);
                     String InstanceId = response.instances().get(0).instanceId();
                     aws.addTag(InstanceId, "Worker");
                 }

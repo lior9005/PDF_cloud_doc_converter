@@ -4,6 +4,8 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import javax.imageio.ImageIO;
 import software.amazon.awssdk.services.sqs.model.Message;
@@ -11,42 +13,48 @@ import software.amazon.awssdk.services.sqs.model.Message;
 
 public class Worker {
 
-    AWS aws = AWS.getInstance();
+    private AWS aws = AWS.getInstance();
 
     public static void main(String[] args) {
         Worker worker = new Worker();
-        // Get the queue URL from the command line arguments
-        worker.run(args[0], args[1], args[2], args[3]);  // incomingQueueUrl, outgoingQueueUrl, terminateQueueUrl, s3BucketName   
+        worker.run();
     }
 
-    public void run(String incomingQueueUrl, String outgoingQueueUrl, String terminateQueueUrl, String s3BucketName) {
-        while (!shouldTerminate(terminateQueueUrl)) {
-            Message msg = aws.getMessageFromQueue(incomingQueueUrl, 5);
-            processMsg(msg.body(), s3BucketName, outgoingQueueUrl,aws);
-            aws.deleteMessageFromQueue(incomingQueueUrl, msg.receiptHandle());
+    public void run() {
+        while (!shouldTerminate()) {
+            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 5);
+            if(msg == null) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            else{
+                processMsg(msg.body());
+                aws.deleteMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, msg.receiptHandle());
+            }
         }
     }
 
-    public void processMsg(String inputMessage, String s3BucketName, String outgoingQueueUrl, AWS aws) {
+    public void processMsg(String inputMessage) {
         try {
+            // parts = [origin, operation, pdfUrl]
             String[] parts = inputMessage.split("\t");
             if (parts.length != 3) {
                 throw new IllegalArgumentException("Invalid input format. Expected 'operation<tab>pdfUrl'.");
             }
-            String origin = parts[0].trim();
-            String operation = parts[1].trim();
-            String pdfUrl = parts[2].trim();
     
             // Download the PDF file
-            File pdfFile = downloadPdf(pdfUrl);
+            File tempPdfFile = downloadPdf(parts[2]);
     
             // Generate an S3 object key
-            String outputKey = pdfFile.getName().split("\\.")[1] + "_" + operation.toLowerCase() + ".result";
+            String outputKey = tempPdfFile.getName().split("\\.")[1] + "_" + parts[1].toLowerCase() + ".result";
     
             // Perform the requested operation and directly upload to S3
-            String message = performOperation(origin ,pdfFile, operation, s3BucketName, aws, outputKey);
+            String outputPdfURL = performOperation(tempPdfFile, parts[1], outputKey);
 
-            aws.sendSqsMessage(outgoingQueueUrl, message);
+            aws.sendSqsMessage(Resources.WORKER_TO_MANAGER_QUEUE, inputMessage + '\t' + outputPdfURL);
     
         } catch (Exception e) {
             e.printStackTrace(); // Log the error
@@ -54,16 +62,23 @@ public class Worker {
     }
     
 
-    public boolean shouldTerminate(String terminateQueueUrl) {
-        Message msg = aws.getMessageFromQueue(terminateQueueUrl, 1);
-        return (msg.body().equals("terminate"))? true : false;
+    public boolean shouldTerminate() {
+        Message msg = aws.getMessageFromQueue(Resources.TERMINATE_QUEUE, 1);
+        if(msg != null) {
+            aws.deleteMessageFromQueue(Resources.TERMINATE_QUEUE, msg.receiptHandle());
+            return true;
+        }
+        return false;
     }
-
-
     
 // Method to download the PDF from the given URL
-    private static File downloadPdf(String pdfUrl) throws IOException {
-        URL url = new URL(pdfUrl);
+    private File downloadPdf(String pdfUrl) throws IOException {
+        URL url;
+        try {
+            url = new URI(pdfUrl).toURL();
+        } catch (URISyntaxException e) {
+            throw new IOException("Invalid URL syntax: " + pdfUrl, e);
+        }
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod("GET");
         connection.setDoInput(true);
@@ -86,85 +101,49 @@ public class Worker {
         return pdfFile;
     }
 
-    public String performOperation(String origin, File pdfFile, String operation, String s3BucketName, AWS aws, String outputKey) {
-
-        // Initialize the result message to handle errors
-        String resultMessage = "";
-    
-        // Create a temporary file to hold the processed data
+    public String performOperation(File pdfFile, String operation, String outputKey) throws Exception {
         File tempFile = null;
-    
+        String newPath = "";
         try {
-            // Create a temporary file for output
+            //temporary file for output
             tempFile = File.createTempFile("temp", "." + operation.toLowerCase());
     
             // Perform the requested operation
             if ("ToImage".equalsIgnoreCase(operation)) {
                 try {
-                    convertToImage(pdfFile, tempFile);  // Try converting to image
+                    convertToImage(pdfFile, tempFile);
                 } catch (Exception e) {
-                    throw new IOException("Error during ToImage conversion: " + e.getMessage());
+                    return "Error during ToImage conversion: " + e.getMessage();
                 }
             } else if ("ToHTML".equalsIgnoreCase(operation)) {
                 try {
-                    convertToHtml(pdfFile, tempFile);  // Try converting to HTML
+                    convertToHtml(pdfFile, tempFile);
                 } catch (Exception e) {
-                    throw new IOException("Error during ToHTML conversion: " + e.getMessage());
+                    return "Error during ToHTML conversion: " + e.getMessage();
                 }
             } else if ("ToText".equalsIgnoreCase(operation)) {
                 try {
-                    convertToText(pdfFile, tempFile);  // Try converting to text
+                    convertToText(pdfFile, tempFile);
                 } catch (Exception e) {
-                    throw new IOException("Error during ToText conversion: " + e.getMessage());
+                    return "Error during ToText conversion: " + e.getMessage();
                 }
             } else {
-                throw new IllegalArgumentException("Unknown operation: " + operation);
+                return "Unknown operation: " + operation;
             }
     
-            // Attempt to upload the result to S3 (fail silently if there's an error)
-            try {
-                aws.uploadFileToS3(outputKey, tempFile, "outputBucket");
-            } catch (Exception e) {}
-    
+            //upload the result to S3
+            newPath = aws.uploadFileToS3(outputKey, tempFile, Resources.OUTPUT_BUCKET);
+
         } catch (IOException | IllegalArgumentException e) {
-            // Handle exceptions from conversion operations and return a message with the exception description
-            resultMessage = String.format(
-                "<p>%s %s: <a href=\"%s\">%s</a> %s</p>",
-                origin,  // Add the origin at the beginning
-                operation, 
-                pdfFile.toURI().toString(),  // Link to the input PDF file
-                pdfFile.getName(),
-                e.getMessage()  // Short description of the exception
-            );
+            return e.getMessage(); 
         } finally {
             // Clean up by deleting the temporary file if it exists
             if (tempFile != null && tempFile.exists()) {
                 tempFile.delete();
             }
         }
-    
-        // If no exception occurred, return the successful operation message
-        if (resultMessage.isEmpty()) {
-            // Generate the S3 URL for the output file
-            String pdfUrl = "s3://" + s3BucketName + "/" + outputKey;  // S3 URL
-            String outputFileName = outputKey.split("/")[outputKey.split("/").length - 1]; // Extract the output file name
-    
-            // Format the success message
-            resultMessage = String.format(
-                "<p>%s: <a href=\"%s\">%s</a> <a href=\"%s\">%s</a></p>",
-                operation, 
-                pdfFile.toURI().toString(),  // Link to the input PDF file
-                pdfFile.getName(),
-                pdfUrl, // Link to the output file in S3
-                outputFileName  // Name of the output file in S3
-            );
-        }
-    
-        return origin + "\t" + resultMessage;
+        return newPath;
     }
-    
-    
-    
 
     // Method to convert PDF to image
     public static void convertToImage(File pdfFile, File outputFile) throws IOException {
