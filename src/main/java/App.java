@@ -1,7 +1,4 @@
-import software.amazon.awssdk.services.ec2.Ec2Client;
-import software.amazon.awssdk.services.ec2.model.DescribeInstancesRequest;
-import software.amazon.awssdk.services.ec2.model.DescribeInstancesResponse;
-import software.amazon.awssdk.services.ec2.model.Filter;
+import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.services.ec2.model.InstanceStateName;
 import software.amazon.awssdk.services.ec2.model.InstanceType;
 import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
@@ -14,9 +11,6 @@ import java.io.PrintWriter;
 
 public class App {
     final static AWS aws = AWS.getInstance();
-    private static final String appToManagerQueue = "appToManagerQueue";
-    private static final String managerToAppQueue = "managerToAppQueue";
-    Ec2Client ec2Client = Ec2Client.create();
     private String managerInstanceId;
     private String s3OriginalURL = "";
     private File summaryFile;
@@ -59,49 +53,46 @@ public class App {
     }
 
     public void setup() {
-        aws.createBucketIfNotExists("input-bucket");
+        aws.createBucketIfNotExists(Resources.INPUT_BUCKET);
         checkAndStartManagerNode();
         // Initialize SQS queues
         initializeQueues();
     }
 
-    public void checkAndStartManagerNode() {
-        try {
-            DescribeInstancesRequest describeInstancesRequest = DescribeInstancesRequest.builder()
-                .filters(
-                    Filter.builder().name("tag:Role").values("Manager").build()
-                )
-                .build();
-    
-            DescribeInstancesResponse response = ec2Client.describeInstances(describeInstancesRequest);
-    
-            boolean isManagerActive = response.reservations().stream()
-                .flatMap(reservation -> reservation.instances().stream())
-                .anyMatch(instance -> {
-                    if (instance.state().name() == InstanceStateName.RUNNING) {
-                        managerInstanceId = instance.instanceId();  // Store the instance ID
-                        return true;
-                    }
-                    return false;
-                });
-    
-            if (!isManagerActive) {
-                startManagerNode();  // No manager is running, start a new one
-            } else {
-                System.out.println("Manager node is already running with ID: " + managerInstanceId);
-            }
-    
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.out.println("Error checking Manager node status.");
+   public void checkAndStartManagerNode() {
+    try {
+        // Get all instances with the "Manager" label
+        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager);
+        
+        // Check if any of the manager instances are running
+        boolean isManagerActive = managerInstances.stream()
+            .anyMatch(instance -> instance.state().name() == InstanceStateName.RUNNING);
+        
+        if (!isManagerActive) {
+            System.out.println("Creating Manager...");
+            startManagerNode();  // No manager is running, start a new one
+        } else {
+            // Fetch the instance ID of the running manager node
+            String managerInstanceId = managerInstances.stream()
+                .filter(instance -> instance.state().name() == InstanceStateName.RUNNING)
+                .map(Instance::instanceId)
+                .findFirst()
+                .orElse(null);
+            System.out.println("Manager node is already running with ID: " + managerInstanceId);
         }
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        System.out.println("Error checking Manager node status.");
     }
+}
     
     // Modify the startManagerNode method
     public void startManagerNode() {
         try {
             InstanceType instanceType = InstanceType.T2_MICRO;
-            String userDataScript = "java -cp /home/ec2-user/Ass_1-1.0.jar Manager";
+            String userDataScript = "wget https://edenuploadbucket.s3.us-east-1.amazonaws.com/Ass_1-1.0.jar && " + 
+            "java -cp /home/ec2-user/Ass_1-1.0.jar Manager";
     
             // Launch manager node with a specific AMI and instance type
             RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, instanceType, 1, 1, userDataScript);
@@ -116,6 +107,8 @@ public class App {
 
     public void uploadFileToS3(String filePath) {
         try {
+            System.out.println("Uploading file");
+
             File file = new File(filePath);
             if (!file.exists()) {
                 throw new IllegalArgumentException("File does not exist.");
@@ -123,6 +116,7 @@ public class App {
             // Upload file to S3
             s3OriginalURL = aws.uploadFileToS3(filePath, file, "inputBucket");
             System.out.println("File uploaded to S3 at: " + s3OriginalURL);
+
         } catch (Exception e) {
             e.printStackTrace();
             System.out.println("Error uploading file.");
@@ -131,8 +125,8 @@ public class App {
 
     // Method to initialize the SQS queues if needed
     public void initializeQueues() {
-        aws.createQueue(appToManagerQueue);
-        aws.createQueue(managerToAppQueue);
+        aws.createQueue(Resources.APP_TO_MANAGER_QUEUE);
+        aws.createQueue(Resources.MANAGER_TO_APP_QUEUE);
     }
 
     // Poll the manager work status queue and download the file once it is processed

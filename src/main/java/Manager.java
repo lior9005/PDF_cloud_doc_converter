@@ -12,13 +12,6 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class Manager {
-    private static final String appToManagerQueue = "appToManagerQueue";
-    private static final String managerToWorkerQueue = "managerToWorkerQueue";
-    private static final String managerToAppQueue = "managerToAppQueue";
-    private static final String workerToManagerQueue = "workerToManagerQueue";
-    private static final String terminateQueue = "terminateQueue";
-    private static final String INPUT_BUCKET = "outputBucket"; 
-    private static final String OUTPUT_BUCKET = "inputBucket"; 
 
     private static final AWS aws = AWS.getInstance();
     private ExecutorService executorService; 
@@ -37,12 +30,15 @@ public class Manager {
     //finished
     public void run() {
         try {
+            String jobQueueUrl = aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE);
+            String workersDoneQueueUrl = aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE);
+
             while (true) {
                 // Step 1: Check the job queue for incoming messages
                 Message message = aws.getMessageFromQueue(aws.getQueueUrl(appToManagerQueue), 0);
 
                 if (message != null) {
-                    if (message.body().equalsIgnoreCase("Terminate")) {
+                    if (message.body().equalsIgnoreCase("Terminate")) { /////////////////////////////
                         handleTerminateMessage();
                         break;
                     }
@@ -98,6 +94,7 @@ public class Manager {
                 // Delete the job message from the job queue
                 aws.deleteMessageFromQueue(appToManagerQueue, message.receiptHandle());
             } catch (Exception e) {
+
                 e.printStackTrace();
                 Thread.currentThread().interrupt();
             }
@@ -110,7 +107,7 @@ public class Manager {
             // Loop through each string in the list and send it as a separate message to the SQS queue
             for (String message : messages) {
                 // Create a SendMessageRequest for each message
-                aws.sendSqsMessage(managerToWorkerQueue, message);
+                aws.sendSqsMessage(Resources.MANAGER_TO_WORKER_QUEUE, message);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -140,9 +137,9 @@ public class Manager {
             File summaryS3File = new File(fileName);
             String originalFileUrl = urlMap.get(fileName);
             //Upload the summary to S3
-            String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, OUTPUT_BUCKET);
+            String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, Resources.OUTPUT_BUCKET);
             // Step 10: Send a message to the done queue: <originalFileName> \t <newFilePath>
-            aws.sendSqsMessage(aws.getQueueUrl(managerToAppQueue), originalFileUrl + '\t' + summaryFilePath);
+            aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), originalFileUrl + '\t' + summaryFilePath);
         } catch (Exception e) {
             e.printStackTrace();  // Handle potential IO exceptions
         }
@@ -158,7 +155,7 @@ public class Manager {
             List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
             sendMessages(terminateMessages, terminateQueue);
             while (true) {
-                if (aws.getQueueSize(terminateQueue) == 0) {
+                if (aws.getQueueSize(Resources.TERMINATE_QUEUE) == 0) {
                     System.out.println("Terminate Queue is empty. Terminating all workers...");
                     terminateAllWorkers();
                     System.out.println("Number of workers alive: " + aws.getAllInstancesWithLabel(AWS.Label.Worker).size());
@@ -173,7 +170,7 @@ public class Manager {
             e.printStackTrace();
         }
     }
-    //finished
+
     private void terminateAllWorkers() throws InterruptedException{
         List<Instance> workers = aws.getAllInstancesWithLabel(AWS.Label.Worker);
         for(Instance instance : workers){
@@ -189,8 +186,9 @@ public class Manager {
 
             if (currentWorkerCount < numWorkers) {
                 int workersToLaunch = numWorkers - currentWorkerCount;
+                String startupScript = "wget https://edenuploadbucket.s3.us-east-1.amazonaws.com/Ass_1-1.0.jar &&" +
+                "java -cp /home/ec2-user/Ass_1-1.0.jar Worker"; 
                 for (int i = 0; i < workersToLaunch; i++) {
-                    String startupScript = "java -cp /home/ec2-user/Ass_1-1.0.jar Worker"; 
                     aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, startupScript);
                 }
             }

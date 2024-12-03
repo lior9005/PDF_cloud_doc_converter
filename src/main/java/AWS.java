@@ -7,6 +7,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
 import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.ChangeMessageVisibilityRequest;
 import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
 import software.amazon.awssdk.services.sqs.model.CreateQueueResponse;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
@@ -28,21 +29,20 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class AWS {
 
     public final String IMAGE_AMI = "ami-054c83d4f87978fed";
-    public Region region1 = Region.US_WEST_2;
+    public static Region region1 = Region.US_EAST_1;
+    public static Region region2 = Region.US_WEST_2;
     private final S3Client s3;
     private final SqsClient sqs;
     private final Ec2Client ec2;
-    private  final String INPUT_BUCKET = "outputBucket"; 
-    private  final String OUTPUT_BUCKET = "inputBucket"; 
-
     private static AWS instance = null;
 
     private AWS() {
-        s3 = S3Client.builder().region(region1).build();
+        s3 = S3Client.builder().region(region2).build();
         sqs = SqsClient.builder().region(region1).build();
         ec2 = Ec2Client.builder().region(region1).build();
     }
@@ -77,6 +77,7 @@ public class AWS {
         RunInstancesRequest runInstancesRequest = RunInstancesRequest.builder()
                 .imageId(ami)
                 .instanceType(instanceType)
+                .iamInstanceProfile(iam -> iam.name("LabRole"))
                 .minCount(min)
                 .maxCount(max)
                 .userData(Base64.getEncoder().encodeToString(script.getBytes()))
@@ -118,7 +119,7 @@ public class AWS {
 
         return describeInstancesResponse.reservations().stream()
                 .flatMap(r -> r.instances().stream())
-                .toList();
+                .collect(Collectors.toList());
     }
 
     public void terminateInstance(String instanceId) {
@@ -183,6 +184,7 @@ public class AWS {
     }
 
     public void createBucketIfNotExists(String bucketName) {
+        System.out.println("Creating Bucket if needed...");
         try {
             s3.createBucket(CreateBucketRequest
                     .builder()
@@ -376,6 +378,23 @@ public String createQueue(String queueName) {
                 .build();
 
                 sqs.sendMessage(sendMessageRequest);
+    }
+
+    public void releaseMessageToQueue(String queueUrl, String receiptHandle) {
+        try {
+            // Reset the visibility timeout to 0 seconds, making the message immediately available
+            ChangeMessageVisibilityRequest request = ChangeMessageVisibilityRequest.builder()
+                    .queueUrl(queueUrl)
+                    .receiptHandle(receiptHandle)
+                    .visibilityTimeout(0)
+                    .build();
+    
+            sqs.changeMessageVisibility(request);
+            System.out.println("Message visibility reset, released back to queue.");
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.out.println("Error releasing message back to the queue.");
+        }
     }
 
     ///////////////////////
