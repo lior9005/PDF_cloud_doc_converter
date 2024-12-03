@@ -13,13 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class Manager {
-    private static final String appToManagerQueue = "appToManagerQueue";
-    private static final String WORKERS_JOB_QUEUE = "workers-job-queue";
-    private static final String managerToAppQueue = "managerToAppQueue";
-    private static final String WORKERS_DONE_QUEUE = "workers-done-queue";
-    private static final String TERMINATE_QUEUE = "terminate-queue";
-    private static final String INPUT_BUCKET = "outputBucket"; 
-    private static final String OUTPUT_BUCKET = "inputBucket"; 
+
 
     private static final AWS aws = AWS.getInstance();
     private ExecutorService executorService; 
@@ -36,8 +30,8 @@ public class Manager {
 
     public void run() {
         try {
-            String jobQueueUrl = aws.getQueueUrl(appToManagerQueue);
-            String workersDoneQueueUrl = aws.getQueueUrl(WORKERS_DONE_QUEUE);
+            String jobQueueUrl = aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE);
+            String workersDoneQueueUrl = aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE);
             while (true) {
                 // Step 1: Check the job queue for incoming messages
                 Message message = aws.getMessageFromQueue(jobQueueUrl, 0);
@@ -74,7 +68,7 @@ public class Manager {
 
             // Download the file and send tasks to the worker job queue.
             File inputFile = new File("inputFile");
-            aws.downloadFileFromS3(fileLocation, inputFile, INPUT_BUCKET);
+            aws.downloadFileFromS3(fileLocation, inputFile, Resources.INPUT_BUCKET);
 
             File htmlFile = createEmptyHtmlFile(fileLocation);
             List<String> messages = new ArrayList<>();
@@ -91,10 +85,10 @@ public class Manager {
             startWorkerNodes(numWorkers);
 
             // Send tasks to worker queue.
-            sendMessages(messages, WORKERS_JOB_QUEUE);
+            sendMessages(messages, Resources.MANAGER_TO_WORKER_QUEUE);
 
             // Delete the job message from the job queue
-            aws.deleteMessageFromQueue(appToManagerQueue, message.receiptHandle());
+            aws.deleteMessageFromQueue(Resources.APP_TO_MANAGER_QUEUE, message.receiptHandle());
         });
     }
 
@@ -103,7 +97,7 @@ public class Manager {
             // Loop through each string in the list and send it as a separate message to the SQS queue
             for (String message : messages) {
                 // Create a SendMessageRequest for each message
-                aws.sendSqsMessage(WORKERS_JOB_QUEUE, message);
+                aws.sendSqsMessage(Resources.MANAGER_TO_WORKER_QUEUE, message);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -129,9 +123,9 @@ public class Manager {
             // Create a File object for the HTML file
             File htmlFile = new File(fileName);
             //Upload the summary to S3
-            String summaryFilePath = aws.uploadFileToS3(fileName, htmlFile, OUTPUT_BUCKET);
+            String summaryFilePath = aws.uploadFileToS3(fileName, htmlFile, Resources.OUTPUT_BUCKET);
             // Step 10: Send a message to the done queue: <originalFileName> \t <newFilePath>
-            aws.sendSqsMessage(aws.getQueueUrl(managerToAppQueue), fileName.replace("output.html", ".pdf")+ '\t' + summaryFilePath);
+            aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), fileName.replace("output.html", ".pdf")+ '\t' + summaryFilePath);
         } catch (Exception e) {
             e.printStackTrace();  // Handle potential IO exceptions
         }
@@ -167,10 +161,10 @@ public class Manager {
             Thread.currentThread().interrupt(); // Restore interrupted status
         }
         List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
-        sendMessages(terminateMessages, TERMINATE_QUEUE);
+        sendMessages(terminateMessages, Resources.TERMINATE_QUEUE);
         try {
             while (true) {
-                if (aws.getQueueSize(TERMINATE_QUEUE) == 0) {
+                if (aws.getQueueSize(Resources.TERMINATE_QUEUE) == 0) {
                     System.out.println("Terminate Queue is empty. Terminating all workers...");
                     terminateAllWorkers();
                     aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager).get(0).instanceId());

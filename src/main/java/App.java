@@ -1,27 +1,20 @@
-import software.amazon.awssdk.services.ec2.Ec2Client;
-import software.amazon.awssdk.services.ec2.model.DescribeInstancesRequest;
-import software.amazon.awssdk.services.ec2.model.DescribeInstancesResponse;
-import software.amazon.awssdk.services.ec2.model.Filter;
+import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.services.ec2.model.InstanceStateName;
 import software.amazon.awssdk.services.ec2.model.InstanceType;
 import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
 import software.amazon.awssdk.services.sqs.model.*;
-import java.io.File;
-import java.util.UUID;
 
+import java.io.File;
+import java.util.List;
+import java.util.UUID;
 
 public class App {
     final static AWS aws = AWS.getInstance();
-    private static final String appToManagerQueue = "appToManagerQueue";
-    private static final String managerToAppQueue = "managerToAppQueue";
-    Ec2Client ec2Client = Ec2Client.create();
     private String managerInstanceId;
     private String id = UUID.randomUUID().toString();
 
     public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate, optional)]
         System.out.println("Starting App...");
-        System.out.println("AWS Access Key ID: " + System.getenv("AWS_ACCESS_KEY_ID"));
-        System.out.println("AWS Secret Access Key: " + System.getenv("AWS_SECRET_ACCESS_KEY"));
         App app = new App();
         String inFilePath = args[0];
         String outFilePath = args[1];
@@ -38,48 +31,44 @@ public class App {
             e.printStackTrace();
         }
         if(args.length > 3 && args[3].equals("-t")) {
-            aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), "terminate");
+            aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), "terminate");
         }
     }
 
     public void setup() {
-        aws.createBucketIfNotExists("input-bucket");
+        aws.createBucketIfNotExists(Resources.INPUT_BUCKET);
         checkAndStartManagerNode();
         // Initialize SQS queues
         initializeQueues();
     }
 
-    public void checkAndStartManagerNode() {
-        try {
-            DescribeInstancesRequest describeInstancesRequest = DescribeInstancesRequest.builder()
-                .filters(
-                    Filter.builder().name("tag:Role").values("Manager").build()
-                )
-                .build();
-    
-            DescribeInstancesResponse response = ec2Client.describeInstances(describeInstancesRequest);
-    
-            boolean isManagerActive = response.reservations().stream()
-                .flatMap(reservation -> reservation.instances().stream())
-                .anyMatch(instance -> {
-                    if (instance.state().name() == InstanceStateName.RUNNING) {
-                        managerInstanceId = instance.instanceId();  // Store the instance ID
-                        return true;
-                    }
-                    return false;
-                });
-    
-            if (!isManagerActive) {
-                startManagerNode();  // No manager is running, start a new one
-            } else {
-                System.out.println("Manager node is already running with ID: " + managerInstanceId);
-            }
-    
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.out.println("Error checking Manager node status.");
+   public void checkAndStartManagerNode() {
+    try {
+        // Get all instances with the "Manager" label
+        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager);
+        
+        // Check if any of the manager instances are running
+        boolean isManagerActive = managerInstances.stream()
+            .anyMatch(instance -> instance.state().name() == InstanceStateName.RUNNING);
+        
+        if (!isManagerActive) {
+            System.out.println("Creating Manager...");
+            startManagerNode();  // No manager is running, start a new one
+        } else {
+            // Fetch the instance ID of the running manager node
+            String managerInstanceId = managerInstances.stream()
+                .filter(instance -> instance.state().name() == InstanceStateName.RUNNING)
+                .map(Instance::instanceId)
+                .findFirst()
+                .orElse(null);
+            System.out.println("Manager node is already running with ID: " + managerInstanceId);
         }
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        System.out.println("Error checking Manager node status.");
     }
+}
     
     // Modify the startManagerNode method
     public void startManagerNode() {
@@ -101,20 +90,19 @@ public class App {
 
     public void uploadFileAndSendMessage(String filePath, String tasksPerWorker, String appId) {
         try {
-
+            System.out.println("Uploading file");
             File file = new File(filePath);
             if (!file.exists()) {
                 throw new IllegalArgumentException("File does not exist.");
             }
             // Upload file to S3
-            String s3FileLocation = aws.uploadFileToS3(filePath, file, "inputBucket");
+            String s3FileLocation = aws.uploadFileToS3(filePath, file, Resources.INPUT_BUCKET);
             System.out.println("File uploaded to S3 at: " + s3FileLocation);
 
             // Send file location to the file upload queue
-            aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), appId + "\t" + 
+            aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), appId + "\t" + 
                                                                     s3FileLocation + "\t" + 
                                                                         tasksPerWorker);
-
         } catch (Exception e) {
             e.printStackTrace();
             System.out.println("Error uploading file or sending SQS message.");
@@ -123,8 +111,8 @@ public class App {
 
     // Method to initialize the SQS queues if needed
     public void initializeQueues() {
-        aws.createQueue(appToManagerQueue);
-        aws.createQueue(managerToAppQueue);
+        aws.createQueue(Resources.APP_TO_MANAGER_QUEUE);
+        aws.createQueue(Resources.MANAGER_TO_APP_QUEUE);
     }
 
     // Poll the manager work status queue and download the file once it is processed
@@ -135,7 +123,7 @@ public class App {
         while (!downloadCompleted) {
             try {
                 // Receive message from the manager work status queue
-                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(managerToAppQueue), 0);
+                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), 0);
 
                 if (!msg.body().isEmpty()) {
                     String[] msgParts = msg.body().split("\t");
@@ -144,12 +132,12 @@ public class App {
                     if (message.equals(appId)) {
                         File outputFile = new File(outFilePath);
                         // If the message contains the file, download it from S3
-                        aws.downloadFileFromS3(msgParts[2], outputFile, "outputBucket");
+                        aws.downloadFileFromS3(msgParts[2], outputFile, Resources.OUTPUT_BUCKET);
                         downloadCompleted = true;
                     }
 
                     // Delete the message from the queue after processing
-                    aws.deleteMessageFromQueue(aws.getQueueUrl(managerToAppQueue),
+                    aws.deleteMessageFromQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE),
                             msg.receiptHandle());
                 }
             } catch (Exception e) {
