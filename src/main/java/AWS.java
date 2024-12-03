@@ -3,6 +3,7 @@ import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
+import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
@@ -77,7 +78,7 @@ public class AWS {
         RunInstancesRequest runInstancesRequest = RunInstancesRequest.builder()
                 .imageId(ami)
                 .instanceType(instanceType)
-                .iamInstanceProfile(iam -> iam.name("LabRole"))
+                .iamInstanceProfile(iam -> iam.name("LabInstanceProfile"))
                 .minCount(min)
                 .maxCount(max)
                 .userData(Base64.getEncoder().encodeToString(script.getBytes()))
@@ -137,6 +138,17 @@ public class AWS {
         System.out.println("Terminated instance: " + instanceId);
     }
 
+    public CreateTagsResponse addTag(String instanceId, String label){
+        Tag tag = Tag.builder()
+                        .key("Label")
+                        .value(label)
+                        .build();
+        CreateTagsRequest tagRequest = CreateTagsRequest.builder()
+                .resources(instanceId)
+                .tags(tag)
+                .build();
+	    return ec2.createTags(tagRequest);
+    }
 
     ////////////////////////////// S3
 
@@ -177,7 +189,7 @@ public class AWS {
                 e.printStackTrace();
             }
         } catch (S3Exception e) {
-            System.err.println("Error getting data from s3" + e.getMessage());
+            System.err.println("Error getting data from s3 " + e.getMessage());
             e.printStackTrace();
         }
 
@@ -186,6 +198,7 @@ public class AWS {
     public void createBucketIfNotExists(String bucketName) {
         System.out.println("Creating Bucket if needed...");
         try {
+            // Create the S3 bucket if it does not exist
             s3.createBucket(CreateBucketRequest
                     .builder()
                     .bucket(bucketName)
@@ -194,13 +207,44 @@ public class AWS {
                                     .locationConstraint(BucketLocationConstraint.US_WEST_2)
                                     .build())
                     .build());
+    
+            // Wait for the bucket to be created
             s3.waiter().waitUntilBucketExists(HeadBucketRequest.builder()
                     .bucket(bucketName)
                     .build());
+    
+            // Define the Bucket Policy to allow EC2 instances in the current AWS account to access objects in the bucket
+            String bucketPolicy = "{\n" +
+                    "  \"Version\": \"2012-10-17\",\n" +
+                    "  \"Statement\": [\n" +
+                    "    {\n" +
+                    "      \"Effect\": \"Allow\",\n" +
+                    "      \"Principal\": \"*\",\n" +
+                    "      \"Action\": \"s3:GetObject\",\n" +
+                    "      \"Resource\": \"arn:aws:s3:::" + bucketName + "/*\",\n" +
+                    "      \"Condition\": {\n" +
+                    "        \"StringEquals\": {\n" +
+                    "          \"aws:PrincipalType\": \"IAMRole\"\n" +
+                    "        }\n" +
+                    "      }\n" +
+                    "    }\n" +
+                    "  ]\n" +
+                    "}";
+    
+            // Set the bucket policy
+            PutBucketPolicyRequest putBucketPolicyRequest = PutBucketPolicyRequest.builder()
+                    .bucket(bucketName)
+                    .policy(bucketPolicy)
+                    .build();
+            s3.putBucketPolicy(putBucketPolicyRequest);
+    
+            System.out.println("Bucket Policy applied successfully.");
+    
         } catch (S3Exception e) {
-            System.out.println(e.getMessage());
+            System.out.println("Error: " + e.getMessage());
         }
     }
+    
 
 
     public SdkIterable<S3Object> listObjectsInBucket(String bucketName) {
@@ -364,6 +408,7 @@ public String createQueue(String queueName) {
         // Check if there are any messages to process
         if (result.messages().isEmpty()) {
             System.out.println("Queue is empty. Exiting.");
+            return null;
         }
 
         // Process each retrieved message
@@ -372,12 +417,14 @@ public String createQueue(String queueName) {
 
         // Method to send a message to the SQS queue with the relevant details
     public void sendSqsMessage(String queueUrl, String message) {
+        System.out.println("trying to send message ");
         SendMessageRequest sendMessageRequest = SendMessageRequest.builder()
                 .queueUrl(queueUrl)
                 .messageBody(message)
                 .build();
 
                 sqs.sendMessage(sendMessageRequest);
+                System.out.println("message sent");
     }
 
     public void releaseMessageToQueue(String queueUrl, String receiptHandle) {
