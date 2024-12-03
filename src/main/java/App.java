@@ -8,6 +8,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.PrintWriter;
+import java.util.List;
 
 public class App {
     final static AWS aws = AWS.getInstance();
@@ -32,7 +33,7 @@ public class App {
                 app.uploadFileToS3(inFilePath);
 
                 // Send file location to the file upload queue. Format: originalfileURL \t n
-                aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), app.s3OriginalURL + "\t" + tasksPerWorker);
+                aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), app.s3OriginalURL + "\t" + tasksPerWorker);
 
                 // Poll the manager work status queue
                 app.pollManagerQueueAndDownloadFile();
@@ -47,7 +48,7 @@ public class App {
                 e.printStackTrace();
             }
             if(args.length > 3 && args[3].equals("-t")) {
-                aws.sendSqsMessage(aws.getQueueUrl(appToManagerQueue), "terminate");
+                aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), "terminate");
             }
         }
     }
@@ -91,12 +92,14 @@ public class App {
     public void startManagerNode() {
         try {
             InstanceType instanceType = InstanceType.T2_MICRO;
-            String userDataScript = "wget https://edenuploadbucket.s3.us-east-1.amazonaws.com/Ass_1-1.0.jar && " + 
-            "java -cp /home/ec2-user/Ass_1-1.0.jar Manager";
+            String userDataScript = "#!/bin/bash\n" +
+                                    "wget https://eden-input-test-bucket.s3.us-west-2.amazonaws.com/Ass_1-1.0-jar-with-dependencies.jar\n" +
+                                    "java -cp /home/ec2-user/Ass_1-1.0-jar-with-dependencies.jar Manager";
     
             // Launch manager node with a specific AMI and instance type
             RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, instanceType, 1, 1, userDataScript);
-            response.instances().forEach(instance -> managerInstanceId = instance.instanceId()); //just one instance
+            managerInstanceId = response.instances().get(0).instanceId();
+            aws.addTag(managerInstanceId, "Manager");
             System.out.println("Manager node started with ID: " + managerInstanceId);
     
         } catch (Exception e) {
@@ -114,7 +117,7 @@ public class App {
                 throw new IllegalArgumentException("File does not exist.");
             }
             // Upload file to S3
-            s3OriginalURL = aws.uploadFileToS3(filePath, file, "inputBucket");
+            s3OriginalURL = aws.uploadFileToS3(filePath, file, Resources.INPUT_BUCKET);
             System.out.println("File uploaded to S3 at: " + s3OriginalURL);
 
         } catch (Exception e) {
@@ -127,6 +130,9 @@ public class App {
     public void initializeQueues() {
         aws.createQueue(Resources.APP_TO_MANAGER_QUEUE);
         aws.createQueue(Resources.MANAGER_TO_APP_QUEUE);
+        aws.createQueue(Resources.MANAGER_TO_WORKER_QUEUE);
+        aws.createQueue(Resources.WORKER_TO_MANAGER_QUEUE);
+        aws.createQueue(Resources.TERMINATE_QUEUE);
     }
 
     // Poll the manager work status queue and download the file once it is processed
@@ -137,7 +143,7 @@ public class App {
         while (!downloadCompleted) {
             try {
                 // Receive message from the manager work status queue
-                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(managerToAppQueue), 0);
+                Message msg = aws.getMessageFromQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), 0);
                 if (msg != null && !msg.body().isEmpty()) {
                     // Extract the message and check if it matches the uploaded file path
                     String message = msg.body();
@@ -146,20 +152,23 @@ public class App {
                     if (messageParts[0].equals(s3OriginalURL)) {
                         if (messageParts.length == 2) {    
                             // Download the file from the provided S3 URL
-                            aws.downloadFileFromS3(messageParts[1], summaryFile, "outputBucket"); 
+                            aws.downloadFileFromS3(messageParts[1], summaryFile, Resources.OUTPUT_BUCKET); 
                             // Mark the operation as complete
                             downloadCompleted = true;
                             // Delete the message from the queue
-                            aws.deleteMessageFromQueue(aws.getQueueUrl(managerToAppQueue),
+                            aws.deleteMessageFromQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE),
                                     msg.receiptHandle());
                         } else {
                             System.out.println("Invalid message format. Skipping...");
-                            aws.releaseMessageToQueue(aws.getQueueUrl(managerToAppQueue), msg.receiptHandle());
+                            aws.releaseMessageToQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), msg.receiptHandle());
                         }
                     } else {
                         // Release the message back to the queue for other apps
-                        aws.releaseMessageToQueue(aws.getQueueUrl(managerToAppQueue), msg.receiptHandle());
+                        aws.releaseMessageToQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), msg.receiptHandle());
                     }
+                }
+                else{
+                    Thread.sleep(1000);
                 }
             } catch (Exception e) {
                 e.printStackTrace();

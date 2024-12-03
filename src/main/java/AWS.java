@@ -3,6 +3,7 @@ import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
+import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
@@ -77,7 +78,7 @@ public class AWS {
         RunInstancesRequest runInstancesRequest = RunInstancesRequest.builder()
                 .imageId(ami)
                 .instanceType(instanceType)
-                .iamInstanceProfile(iam -> iam.name("LabRole"))
+                .iamInstanceProfile(iam -> iam.name("LabInstanceProfile"))
                 .minCount(min)
                 .maxCount(max)
                 .userData(Base64.getEncoder().encodeToString(script.getBytes()))
@@ -137,6 +138,17 @@ public class AWS {
         System.out.println("Terminated instance: " + instanceId);
     }
 
+    public CreateTagsResponse addTag(String instanceId, String label){
+        Tag tag = Tag.builder()
+                        .key("Label")
+                        .value(label)
+                        .build();
+        CreateTagsRequest tagRequest = CreateTagsRequest.builder()
+                .resources(instanceId)
+                .tags(tag)
+                .build();
+	    return ec2.createTags(tagRequest);
+    }
 
     ////////////////////////////// S3
 
@@ -364,6 +376,7 @@ public String createQueue(String queueName) {
         // Check if there are any messages to process
         if (result.messages().isEmpty()) {
             System.out.println("Queue is empty. Exiting.");
+            return  null;
         }
 
         // Process each retrieved message
@@ -372,12 +385,14 @@ public String createQueue(String queueName) {
 
         // Method to send a message to the SQS queue with the relevant details
     public void sendSqsMessage(String queueUrl, String message) {
+        System.out.println("trying to send message ");
         SendMessageRequest sendMessageRequest = SendMessageRequest.builder()
                 .queueUrl(queueUrl)
                 .messageBody(message)
                 .build();
 
                 sqs.sendMessage(sendMessageRequest);
+                System.out.println("message sent");
     }
 
     public void releaseMessageToQueue(String queueUrl, String receiptHandle) {
