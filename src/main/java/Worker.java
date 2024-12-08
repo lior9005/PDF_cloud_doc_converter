@@ -14,6 +14,7 @@ import software.amazon.awssdk.services.sqs.model.Message;
 public class Worker {
 
     private AWS aws = AWS.getInstance();
+    private File downloadFile = null;
 
     public static void main(String[] args) {
         Worker worker = new Worker();
@@ -22,7 +23,7 @@ public class Worker {
 
     public void run() {
         while (!shouldTerminate()) {
-            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 5);
+            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 60);
             if(msg == null) {
                 try {
                     Thread.sleep(1000);
@@ -31,6 +32,7 @@ public class Worker {
                 }
             }
             else{
+                System.out.println(msg.body());
                 processMsg(msg.body());
                 aws.deleteMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, msg.receiptHandle());
             }
@@ -42,20 +44,24 @@ public class Worker {
             // parts = [origin, operation, pdfUrl]
             String[] parts = inputMessage.split("\t");
             if (parts.length != 3) {
-                throw new IllegalArgumentException("Invalid input format. Expected 'operation<tab>pdfUrl'.");
+                throw new IllegalArgumentException("Invalid input format. Expected 'origin<tab>operation<tab>pdfUrl'.");
             }
     
             // Download the PDF file
-            File tempPdfFile = downloadPdf(parts[2]);
+            String details = downloadPdf(parts[2]);
     
             // Generate an S3 object key
-            String outputKey = tempPdfFile.getName().split("\\.")[1] + "_" + parts[1].toLowerCase() + ".result";
+            if(details != ""){
+                aws.sendSqsMessage(Resources.WORKER_TO_MANAGER_QUEUE, inputMessage + '\t' + details);
+            }
+            else{
+                String outputKey = downloadFile.getName() + "_" + parts[1].toLowerCase() + ".result";
     
-            // Perform the requested operation and directly upload to S3
-            String outputPdfURL = performOperation(tempPdfFile, parts[1], outputKey);
+                // Perform the requested operation and directly upload to S3
+                String outputPdfURL = performOperation(downloadFile, parts[1], outputKey);
+                aws.sendSqsMessage(Resources.WORKER_TO_MANAGER_QUEUE, inputMessage + '\t' + outputPdfURL);
+            }
 
-            aws.sendSqsMessage(Resources.WORKER_TO_MANAGER_QUEUE, inputMessage + '\t' + outputPdfURL);
-    
         } catch (Exception e) {
             e.printStackTrace(); // Log the error
         }
@@ -72,12 +78,12 @@ public class Worker {
     }
     
 // Method to download the PDF from the given URL
-    private File downloadPdf(String pdfUrl) throws IOException {
+    private String downloadPdf(String pdfUrl) throws IOException {
         URL url;
         try {
             url = new URI(pdfUrl).toURL();
         } catch (URISyntaxException e) {
-            throw new IOException("Invalid URL syntax: " + pdfUrl, e);
+            return "Invalid URL syntax";
         }
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod("GET");
@@ -86,11 +92,12 @@ public class Worker {
 
         int responseCode = connection.getResponseCode();
         if (responseCode != HttpURLConnection.HTTP_OK) {
-            throw new IOException("Page not found: " + responseCode);
+            System.out.println(pdfUrl);
+            return "Page not found";
         }
 
         InputStream inputStream = connection.getInputStream();
-        File pdfFile = new File("downloads", pdfUrl.substring(pdfUrl.lastIndexOf('/') + 1)); // Save in 'downloads' folder
+        File pdfFile = new File(pdfUrl.substring(pdfUrl.lastIndexOf('/') + 1));
         try (OutputStream outputStream = new FileOutputStream(pdfFile)) {
             byte[] buffer = new byte[4096];
             int bytesRead;
@@ -98,71 +105,76 @@ public class Worker {
                 outputStream.write(buffer, 0, bytesRead);
             }
         }
-        return pdfFile;
+        downloadFile = pdfFile;
+        return "";
     }
 
     public String performOperation(File pdfFile, String operation, String outputKey) throws Exception {
-        File tempFile = null;
+        String convertedFilePath = null;
         String newPath = "";
+        File toUpload = null;
         try {
             //temporary file for output
-            tempFile = File.createTempFile("temp", "." + operation.toLowerCase());
+            convertedFilePath = pdfFile + "_" + operation.toLowerCase();
     
             // Perform the requested operation
             if ("ToImage".equalsIgnoreCase(operation)) {
                 try {
-                    convertToImage(pdfFile, tempFile);
+                    convertToImage(pdfFile, convertedFilePath + ".png");
+                    toUpload = new File(convertedFilePath + ".png");
                 } catch (Exception e) {
                     return "Error during ToImage conversion: " + e.getMessage();
                 }
             } else if ("ToHTML".equalsIgnoreCase(operation)) {
                 try {
-                    convertToHtml(pdfFile, tempFile);
+                    convertToHtml(pdfFile, convertedFilePath + ".html");
+                    toUpload = new File(convertedFilePath + ".html");
                 } catch (Exception e) {
                     return "Error during ToHTML conversion: " + e.getMessage();
                 }
             } else if ("ToText".equalsIgnoreCase(operation)) {
                 try {
-                    convertToText(pdfFile, tempFile);
+                    convertToText(pdfFile, convertedFilePath + ".txt");
+                    toUpload = new File(convertedFilePath + ".txt");
                 } catch (Exception e) {
                     return "Error during ToText conversion: " + e.getMessage();
                 }
             } else {
                 return "Unknown operation: " + operation;
             }
-    
+            
             //upload the result to S3
-            newPath = aws.uploadFileToS3(outputKey, tempFile, Resources.OUTPUT_BUCKET);
+            newPath = aws.uploadFileToS3(outputKey, toUpload , Resources.OUTPUT_BUCKET);
 
         } catch (IOException | IllegalArgumentException e) {
             return e.getMessage(); 
         } finally {
-            // Clean up by deleting the temporary file if it exists
-            if (tempFile != null && tempFile.exists()) {
-                tempFile.delete();
-            }
+            // Clean up by deleting the file if it exists
+          //  if (new File(convertedFilePath) != null && new File(convertedFilePath).exists()) {
+         //       new File(convertedFilePath).delete();
+           // }
         }
         return newPath;
     }
 
     // Method to convert PDF to image
-    public static void convertToImage(File pdfFile, File outputFile) throws IOException {
+    public static void convertToImage(File pdfFile, String outputFilePath) throws IOException {
         try (PDDocument document = PDDocument.load(pdfFile)) {
             PDFRenderer renderer = new PDFRenderer(document);
             BufferedImage image = renderer.renderImage(0); // Render the first page
     
             // Write directly to the output file
-            ImageIO.write(image, "PNG", outputFile);
+            ImageIO.write(image, "PNG", new File(outputFilePath));
         }
     }
 
     // Method to convert PDF to HTML
-    public static void convertToHtml(File pdfFile, File outputFile) throws IOException {
+    public static void convertToHtml(File pdfFile, String outputFilePath) throws IOException {
         try (PDDocument document = PDDocument.load(pdfFile)) {
             PDFTextStripper stripper = new PDFTextStripper();
             String text = stripper.getText(document);
     
-            try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile))) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
                 writer.write("<html><body>\n");
                 writer.write("<pre>" + text + "</pre>\n");
                 writer.write("</body></html>");
@@ -171,12 +183,12 @@ public class Worker {
     }
     
     // Method to convert PDF to text
-    public static void convertToText(File pdfFile, File outputFile) throws IOException {
+    public static void convertToText(File pdfFile,String outputFilePath) throws IOException {
         try (PDDocument document = PDDocument.load(pdfFile)) {
             PDFTextStripper stripper = new PDFTextStripper();
             String text = stripper.getText(document);
     
-            try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile))) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
                 writer.write(text);
             }
         }
