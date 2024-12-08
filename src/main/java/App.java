@@ -18,6 +18,7 @@ public class App {
     private String managerInstanceId;
     private String s3OriginalURL = "";
     private File summaryFile;
+    private String inFilePath = "";
 
     public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate, optional)]
         if(args.length < 3) {
@@ -25,18 +26,18 @@ public class App {
         }
         else{
             App app = new App();
-            String inFilePath = args[0];
+            app.inFilePath = args[0];
             String outFilePath = args[1];
             String tasksPerWorker = args[2];
-            app.summaryFile = new File(outFilePath + ".tmp");
+            app.summaryFile = new File(outFilePath + "_tmp");
             try {
                 // Setting up the necessary services
                 app.setup();
                 // Upload a file to S3 and send a message to SQS
-                app.uploadFileToS3(inFilePath);
+                app.upload();
 
                 // Send file location to the file upload queue. Format: originalfileURL \t n
-                aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), inFilePath + "\t" + tasksPerWorker);
+                aws.sendSqsMessage(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), app.inFilePath + "\t" + tasksPerWorker);
 
                 // Poll the manager work status queue
                 app.pollManagerQueueAndDownloadFile();
@@ -58,6 +59,7 @@ public class App {
 
     public void setup() {
         aws.createBucketIfNotExists(Resources.INPUT_BUCKET);
+        aws.createBucketIfNotExists(Resources.OUTPUT_BUCKET);
         checkAndStartManagerNode();
         // Initialize SQS queues
         initializeQueues();
@@ -111,16 +113,16 @@ public class App {
         }
     }
 
-    public void uploadFileToS3(String filePath) {
+    public void upload() {
         try {
             System.out.println("Uploading file");
 
-            File file = new File(filePath);
+            File file = new File(inFilePath);
             if (!file.exists()) {
                 throw new IllegalArgumentException("File does not exist.");
             }
             // Upload file to S3
-            s3OriginalURL = aws.uploadFileToS3(filePath, file, Resources.INPUT_BUCKET);
+            s3OriginalURL = aws.uploadFileToS3(inFilePath, file, Resources.INPUT_BUCKET);
             System.out.println("File uploaded to S3 at: " + s3OriginalURL);
 
         } catch (Exception e) {
@@ -152,10 +154,14 @@ public class App {
                     String message = msg.body();
                     //messageParts[0] = originalURL ; messageParts[1] = summaryfileURL
                     String[] messageParts = message.split("\t");
-                    if (messageParts[0].equals(s3OriginalURL)) {
+                    if (messageParts[0].equals(inFilePath)) {
                         if (messageParts.length == 2) {    
                             // Download the file from the provided S3 URL
-                            aws.downloadFileFromS3(messageParts[1], summaryFile, Resources.OUTPUT_BUCKET); 
+                            System.out.println("messageParts[1] " + messageParts[1]);
+                            System.out.println("inFilePath " + inFilePath);
+
+                            //download summary file
+                            aws.downloadFileFromS3(inFilePath + "_tempOutputFile", summaryFile, Resources.OUTPUT_BUCKET); 
                             // Mark the operation as complete
                             downloadCompleted = true;
                             // Delete the message from the queue
@@ -167,7 +173,7 @@ public class App {
                         }
                     } else {
                         // Release the message back to the queue for other apps
-                        aws.releaseMessageToQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), msg.receiptHandle());
+                        //aws.releaseMessageToQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), msg.receiptHandle());
                     }
                 }
                 else{

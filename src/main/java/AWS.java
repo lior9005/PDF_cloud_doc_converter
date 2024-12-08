@@ -113,6 +113,10 @@ public class AWS {
                         .filters(Filter.builder()
                                 .name("tag:Label")
                                 .values(label.toString())
+                                .build(),
+                                Filter.builder()
+                                .name("instance-state-name")
+                                .values("running")
                                 .build())
                         .build();
 
@@ -134,8 +138,6 @@ public class AWS {
         } catch (Ec2Exception e) {
             throw e;
         }
-
-        System.out.println("Terminated instance: " + instanceId);
     }
 
     public CreateTagsResponse addTag(String instanceId, String label){
@@ -164,7 +166,7 @@ public class AWS {
 
         s3.putObject(req, file.toPath()); // we don't need to check if the file exist already
         // Return the S3 path of the uploaded file
-        return "s3://" + bucketName + "/" + keyPath;
+        return "https://" + bucketName + ".s3.us-west-2.amazonaws.com/" + keyPath;
     }
 
     public void downloadFileFromS3(String keyPath, File outputFile, String bucketName) {
@@ -357,7 +359,7 @@ public String createQueue(String queueName) {
         } catch (SqsException e) {
             System.err.println(e.awsErrorDetails().errorMessage());
         }
-        System.out.println("Queue URL: " + queueUrl);
+        //System.out.println("Queue URL: " + queueUrl);
         return queueUrl;
     }
 
@@ -407,7 +409,7 @@ public String createQueue(String queueName) {
 
         // Check if there are any messages to process
         if (result.messages().isEmpty()) {
-            System.out.println("Queue is empty. Exiting.");
+            //System.out.println("Queue is empty. Exiting.");
             return null;
         }
 
@@ -417,14 +419,14 @@ public String createQueue(String queueName) {
 
         // Method to send a message to the SQS queue with the relevant details
     public void sendSqsMessage(String queueUrl, String message) {
-        System.out.println("trying to send message ");
+       // System.out.println("trying to send message ");
         SendMessageRequest sendMessageRequest = SendMessageRequest.builder()
                 .queueUrl(queueUrl)
                 .messageBody(message)
                 .build();
 
                 sqs.sendMessage(sendMessageRequest);
-                System.out.println("message sent");
+               // System.out.println("message sent");
     }
 
     public void releaseMessageToQueue(String queueUrl, String receiptHandle) {
