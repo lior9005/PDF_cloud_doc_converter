@@ -107,18 +107,30 @@ public class AWS {
                 .toList();
     }
 
-    public List<Instance> getAllInstancesWithLabel(Label label) throws InterruptedException {
-        DescribeInstancesRequest describeInstancesRequest =
-                DescribeInstancesRequest.builder()
-                        .filters(Filter.builder()
-                                .name("tag:Label")
-                                .values(label.toString())
-                                .build(),
-                                Filter.builder()
-                                .name("instance-state-name")
-                                .values("running")
-                                .build())
-                        .build();
+    public List<Instance> getAllInstancesWithLabel(Label label, boolean running) throws InterruptedException {
+        DescribeInstancesRequest describeInstancesRequest = null;
+        if(running){
+            describeInstancesRequest =
+            DescribeInstancesRequest.builder()
+                    .filters(Filter.builder()
+                            .name("tag:Label")
+                            .values(label.toString())
+                            .build(),
+                            Filter.builder()
+                            .name("instance-state-name")
+                            .values("running")
+                            .build())
+                    .build();
+        }
+        else{
+            describeInstancesRequest =
+            DescribeInstancesRequest.builder()
+                    .filters(Filter.builder()
+                            .name("tag:Label")
+                            .values(label.toString())
+                            .build())
+                    .build();
+        }
 
         DescribeInstancesResponse describeInstancesResponse = ec2.describeInstances(describeInstancesRequest);
 
@@ -152,6 +164,35 @@ public class AWS {
 	    return ec2.createTags(tagRequest);
     }
 
+
+    public boolean checkInstanceHealth(String instanceId) {
+        // Create the request to describe the instance status
+        DescribeInstanceStatusRequest describeInstanceStatusRequest = DescribeInstanceStatusRequest.builder()
+                .instanceIds(instanceId)  // Specify the instance ID
+                .build();
+        try {
+            // Fetch the instance status
+            DescribeInstanceStatusResponse describeInstanceStatusResponse = ec2.describeInstanceStatus(describeInstanceStatusRequest);
+            
+            // Ensure there's at least one instance status in the response
+            if (describeInstanceStatusResponse.instanceStatuses().isEmpty()) {
+                System.err.println("No status information available for the instance.");
+                return false;
+            }
+    
+            // Get the instance status
+            InstanceStatus instanceStatus = describeInstanceStatusResponse.instanceStatuses().get(0);
+    
+            // Check if the status values are OK
+            boolean isSystemStatusOk = instanceStatus.systemStatus().status().toString().equals("ok");
+            boolean isInstanceStatusOk = instanceStatus.instanceStatus().status().toString().equals("ok");
+    
+            return isSystemStatusOk && isInstanceStatusOk;
+        } catch (Ec2Exception e) {
+            System.err.println("Error checking instance health: " + e.getMessage());
+            return false;
+        }
+    }
     ////////////////////////////// S3
 
     public String uploadFileToS3(String keyPath, File file, String bucketName) throws Exception {

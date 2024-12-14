@@ -156,10 +156,6 @@ public class App {
                     String[] messageParts = message.split("\t");
                     if (messageParts[0].equals(inFilePath)) {
                         if (messageParts.length == 2) {    
-                            // Download the file from the provided S3 URL
-                            System.out.println("messageParts[1] " + messageParts[1]);
-                            System.out.println("inFilePath " + inFilePath);
-
                             //download summary file
                             aws.downloadFileFromS3(inFilePath + "_tempOutputFile", summaryFile, Resources.OUTPUT_BUCKET); 
                             // Mark the operation as complete
