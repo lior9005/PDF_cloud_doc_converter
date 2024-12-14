@@ -147,7 +147,7 @@ public class Manager {
         System.out.println("Received termination request. Shutting down...");
         executorService.shutdownNow();
         try {
-            int currentWorkerCount = aws.getAllInstancesWithLabel(AWS.Label.Worker).size();
+            int currentWorkerCount = aws.getAllInstancesWithLabel(AWS.Label.Worker, true).size();
             System.out.println("There are " + currentWorkerCount + "workers to terminate");
             List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
             sendMessages(terminateMessages, Resources.TERMINATE_QUEUE);
@@ -156,7 +156,7 @@ public class Manager {
                     System.out.println("Terminate Queue is empty. Terminating all workers...");
                     terminateAllWorkers();
                     System.out.println("Terminating Manager...");
-                    aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager).get(0).instanceId());
+                    aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager, true).get(0).instanceId());
                     break;
                 }
                 System.out.println("Waiting for " + aws.getQueueSize(Resources.TERMINATE_QUEUE) + "workers to finish their current jobs. Waiting...");
@@ -168,7 +168,7 @@ public class Manager {
     }
 
     private void terminateAllWorkers() throws InterruptedException{
-        List<Instance> workers = aws.getAllInstancesWithLabel(AWS.Label.Worker);
+        List<Instance> workers = aws.getAllInstancesWithLabel(AWS.Label.Worker, true);
         for(Instance instance : workers){
             String id = instance.instanceId();
             aws.terminateInstance(instance.instanceId());
@@ -179,7 +179,7 @@ public class Manager {
     //update the startupscript that runs worker
     private synchronized void startWorkerNodes(int numWorkers) {
         try {
-            List<Instance> runningInstances = aws.getAllInstancesWithLabel(AWS.Label.Worker);
+            List<Instance> runningInstances = aws.getAllInstancesWithLabel(AWS.Label.Worker, true);
             int currentWorkerCount = runningInstances.size();
             if (currentWorkerCount < numWorkers) {
                 int workersToLaunch = numWorkers - currentWorkerCount;
@@ -210,5 +210,26 @@ public class Manager {
         }
         return parsedMessages;
     }
+
+    public void checkAndReplaceUnhealthyInstances() {
+        try {
+            List<Instance> instances = aws.getAllInstancesWithLabel(AWS.Label.Worker, false);
+            for(Instance instance : instances){
+                if(aws.checkInstanceHealth(instance.instanceId()) == false){
+                    System.out.println("Instance " + instance.instanceId() + " is unhealthy. Replacing...");
+                    aws.terminateInstance(instance.instanceId());
+                    String userDataScript = "#!/bin/bash\n" +
+                "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
+                "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
+                System.out.println("initialized new worker ");
+                RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, userDataScript);
+                String InstanceId = response.instances().get(0).instanceId();
+                aws.addTag(InstanceId, "Worker");
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 
 }
