@@ -14,9 +14,8 @@ public class Manager {
 
     private static final AWS aws = AWS.getInstance();
     private ExecutorService executorService; 
-    private Map<String, Integer> fileProcessingCount = new HashMap<>();
-    private Map<String, String> urlMap = new HashMap<>();
-
+    private Map<String, Integer> fileProcessingCount = new ConcurrentHashMap<>();
+    private Map<String, String> urlMap = new ConcurrentHashMap<>();
     public Manager() {
         this.executorService = Executors.newFixedThreadPool(2);
     }
@@ -31,7 +30,6 @@ public class Manager {
         try {
             while (true) {
                 // Step 1: Check the job queue for incoming messages
-           //    System.out.println("checking messages from clients");
                 Message message = aws.getMessageFromQueue(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), 0);
 
                 if (message != null) {
@@ -45,7 +43,6 @@ public class Manager {
                     submitMessageTask(message);
                 }
 
-            //    System.out.println("checking messages from workers");
                 Message doneMessage = aws.getMessageFromQueue(aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE), 0);
                 if (doneMessage != null) {
                     //divide message to outfileurl : actualmessage
@@ -55,9 +52,8 @@ public class Manager {
                     //delete message from queue so the message will not be written again
                     aws.deleteMessageFromQueue(aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE), doneMessage.receiptHandle());
                     //update the map in order to know how many tasks left for file
-                    System.out.println(parts[0]);
-                    System.out.println(fileProcessingCount.get(parts[0]));
-                    fileProcessingCount.put(parts[0], fileProcessingCount.get(parts[0]) - 1);
+                    int tasksLeft = fileProcessingCount.get(parts[0]) - 1;
+                    fileProcessingCount.put(parts[0], tasksLeft);
                     //if all tasks completed, send summaryfile to app queue
                     if(fileProcessingCount.get(parts[0]) == 0){
                         sendSummaryFile(parts[0]);
@@ -148,7 +144,6 @@ public class Manager {
         executorService.shutdownNow();
         try {
             int currentWorkerCount = aws.getAllInstancesWithLabel(AWS.Label.Worker, true).size();
-            System.out.println("There are " + currentWorkerCount + "workers to terminate");
             List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
             sendMessages(terminateMessages, Resources.TERMINATE_QUEUE);
             while (true) {
@@ -159,7 +154,6 @@ public class Manager {
                     aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager, true).get(0).instanceId());
                     break;
                 }
-                System.out.println("Waiting for " + aws.getQueueSize(Resources.TERMINATE_QUEUE) + "workers to finish their current jobs. Waiting...");
                 Thread.sleep(100); // Poll every 0.1 seconds
             }
         } catch (InterruptedException e) {
@@ -172,7 +166,6 @@ public class Manager {
         for(Instance instance : workers){
             String id = instance.instanceId();
             aws.terminateInstance(instance.instanceId());
-            System.out.println("Terminated worker instance: " + id);
         }
     }
     
@@ -187,7 +180,6 @@ public class Manager {
                 "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
                 "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
                 for (int i = 0; i < workersToLaunch; i++) {
-                    System.out.println("initialize worker " + i);
                     RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, userDataScript);
                     String InstanceId = response.instances().get(0).instanceId();
                     aws.addTag(InstanceId, "Worker");
@@ -204,7 +196,6 @@ public class Manager {
             String line;
             while ((line = reader.readLine()) != null) {
                 // Add message to list
-                System.out.println(fileName + '\t' + line);
                 parsedMessages.add(fileName + '\t' + line);
             }
         }
@@ -221,7 +212,6 @@ public class Manager {
                     String userDataScript = "#!/bin/bash\n" +
                 "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
                 "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
-                System.out.println("initialized new worker ");
                 RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, userDataScript);
                 String InstanceId = response.instances().get(0).instanceId();
                 aws.addTag(InstanceId, "Worker");
@@ -229,7 +219,7 @@ public class Manager {
             }
         } catch (Exception e) {
             e.printStackTrace();
-        }
-    }
+        }
+    }
 
 }

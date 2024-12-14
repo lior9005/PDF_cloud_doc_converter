@@ -68,14 +68,10 @@ public class App {
    public void checkAndStartManagerNode() {
     try {
         // Get all instances with the "Manager" label
-        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager);
-        
-        // Check if any of the manager instances are running
-        boolean isManagerActive = managerInstances.stream()
-            .anyMatch(instance -> instance.state().name() == InstanceStateName.RUNNING);
-        
-        if (!isManagerActive) {
-            System.out.println("Creating Manager...");
+        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, true);
+                
+        if (managerInstances.isEmpty()) {
+            System.out.println("Checking for running manager...");
             startManagerNode();  // No manager is running, start a new one
         } else {
             // Fetch the instance ID of the running manager node
