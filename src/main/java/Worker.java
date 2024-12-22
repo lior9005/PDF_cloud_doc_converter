@@ -23,7 +23,7 @@ public class Worker {
 
     public void run() {
         while (!shouldTerminate()) {
-            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 60);
+            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 20);
             if(msg == null) {
                 try {
                     Thread.sleep(1000);
@@ -144,7 +144,8 @@ public class Worker {
             }
             
             //upload the result to S3
-            newPath = aws.uploadFileToS3(outputKey, toUpload , Resources.OUTPUT_BUCKET);
+            aws.uploadFileToS3(outputKey, toUpload , Resources.OUTPUT_BUCKET);
+            newPath = aws.generatePresignedUrl(outputKey);
 
         } catch (IOException | IllegalArgumentException e) {
             return e.getMessage(); 

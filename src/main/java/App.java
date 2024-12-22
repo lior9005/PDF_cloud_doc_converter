@@ -58,34 +58,42 @@ public class App {
     public void setup() {
         aws.createBucketIfNotExists(Resources.INPUT_BUCKET);
         aws.createBucketIfNotExists(Resources.OUTPUT_BUCKET);
-        checkAndStartManagerNode();
+        //checkAndStartManagerNode();
         // Initialize SQS queues
         initializeQueues();
     }
 
-   public void checkAndStartManagerNode() {
-    try {
-        // Get all instances with the "Manager" label
-        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, false);
-                
-        if (managerInstances.isEmpty()) {
+    public void checkAndStartManagerNode() {
+        try {
             System.out.println("Checking for running manager...");
-            startManagerNode();  // No manager is running, start a new one
-        } else {
-            // Fetch the instance ID of the running manager node
-            String managerInstanceId = managerInstances.stream()
-                .filter(instance -> instance.state().name() == InstanceStateName.RUNNING)
-                .map(Instance::instanceId)
-                .findFirst()
-                .orElse(null);
-            System.out.println("Manager node is already running with ID: " + managerInstanceId);
+    
+            // Get all instances with the "Manager" label
+            List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, false);
+    
+            boolean hasActiveManager = managerInstances.stream()
+                .anyMatch(instance -> {
+                    InstanceStateName stateName = instance.state().name();
+                    return stateName == InstanceStateName.RUNNING || stateName == InstanceStateName.PENDING;
+                });
+    
+            if (!hasActiveManager) {
+                startManagerNode(); // No active manager, start a new one
+            } else {
+                // Fetch the instance ID of the running or initializing manager node
+                String managerInstanceId = managerInstances.stream()
+                    .filter(instance -> instance.state().name() == InstanceStateName.RUNNING || instance.state().name() == InstanceStateName.PENDING)
+                    .map(Instance::instanceId)
+                    .findFirst()
+                    .orElse(null);
+                System.out.println("Manager node is already running or initializing with ID: " + managerInstanceId);
+            }
+    
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.out.println("Error checking Manager node status.");
         }
-
-    } catch (Exception e) {
-        e.printStackTrace();
-        System.out.println("Error checking Manager node status.");
     }
-}
+    
     
     // Modify the startManagerNode method
     public void startManagerNode() {

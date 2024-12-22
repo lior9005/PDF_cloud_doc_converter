@@ -92,7 +92,7 @@ public class Manager {
                 
                 // Create worker nodes
                 int numWorkers = (int) Math.min(Math.ceil((double)messages.size()/workerCount), 9);
-                startWorkerNodes(numWorkers);
+                //startWorkerNodes(numWorkers);
 
                 // Send tasks to worker queue.
                 sendMessages(messages, Resources.MANAGER_TO_WORKER_QUEUE);

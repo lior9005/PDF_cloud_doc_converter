@@ -7,6 +7,8 @@ import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.ChangeMessageVisibilityRequest;
 import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
@@ -29,6 +31,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URL;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -346,6 +350,28 @@ public class AWS {
         deleteEmptyBucket(bucketName);
     }
 
+    public String generatePresignedUrl(String objectKey) {
+        try (S3Presigner presigner = S3Presigner.builder()
+            .region(region2) // Set region here
+            .build()) {
+        // Set up the request to get the object from S3
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(Resources.OUTPUT_BUCKET)
+                .key(objectKey)
+                .build();
+
+        // Generate the presigned URL
+        PresignedGetObjectRequest presignedRequest = presigner.presignGetObject(r -> r.getObjectRequest(getObjectRequest)
+                .signatureDuration(Duration.ofMinutes(10))); // URL valid for 10 minutes
+
+        // Return the presigned URL as a string
+        URL url = presignedRequest.url();
+        return url.toString();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "Error generating presigned URL: " + e.getMessage();
+        }
+    }
     //////////////////////////////////////////////SQS
 
     /**
