@@ -16,6 +16,7 @@ public class Manager {
     private ExecutorService executorService; 
     private Map<String, Integer> fileProcessingCount = new ConcurrentHashMap<>();
     private Map<String, String> urlMap = new ConcurrentHashMap<>();
+
     public Manager() {
         this.executorService = Executors.newFixedThreadPool(2);
     }
@@ -95,12 +96,23 @@ public class Manager {
 
                 // Send tasks to worker queue.
                 sendMessages(messages, Resources.MANAGER_TO_WORKER_QUEUE);
+
+                // Delete temp file
+                deleteFile(temp);
             } catch (Exception e) {
                 e.printStackTrace();
             }
         });
     }
     
+    private void deleteFile(File file) {
+        if (file != null && file.exists()) {
+            if (!file.delete()) {
+                System.err.println("Failed to delete file: " + file.getAbsolutePath());
+            }
+        }
+    }
+
     private void sendMessages(List<String> messages, String q) {
         try {
             // Loop through each string in the list and send it as a separate message to the SQS queue
@@ -138,6 +150,8 @@ public class Manager {
             String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, Resources.OUTPUT_BUCKET);
             // Step 10: Send a message to the done queue: <originalFileName> \t <newFilePath>
             aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), originalFileUrl + '\t' + summaryFilePath);
+            // Delete temp summary file
+            deleteFile(summaryS3File);
         } catch (Exception e) {
             e.printStackTrace();  // Handle potential IO exceptions
         }
