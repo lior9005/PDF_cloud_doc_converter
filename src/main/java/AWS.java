@@ -191,8 +191,8 @@ public class AWS {
         } catch (Ec2Exception e) {
             System.err.println("Error checking instance health: " + e.getMessage());
             return false;
-        }
-    }
+        }
+    }
     ////////////////////////////// S3
 
     public String uploadFileToS3(String keyPath, File file, String bucketName) throws Exception {
@@ -239,7 +239,7 @@ public class AWS {
     }
 
     public void createBucketIfNotExists(String bucketName) {
-        System.out.println("Creating Bucket if needed...");
+        System.out.println("Creating Bucket " + bucketName + " if does not exist...");
         try {
             // Create the S3 bucket if it does not exist
             s3.createBucket(CreateBucketRequest
@@ -284,7 +284,7 @@ public class AWS {
             System.out.println("Bucket Policy applied successfully.");
     
         } catch (S3Exception e) {
-            System.out.println("Error: " + e.getMessage());
+            System.out.println(e.getMessage());
         }
     }
     
@@ -400,7 +400,6 @@ public String createQueue(String queueName) {
         } catch (SqsException e) {
             System.err.println(e.awsErrorDetails().errorMessage());
         }
-        //System.out.println("Queue URL: " + queueUrl);
         return queueUrl;
     }
 
@@ -450,7 +449,6 @@ public String createQueue(String queueName) {
 
         // Check if there are any messages to process
         if (result.messages().isEmpty()) {
-            //System.out.println("Queue is empty. Exiting.");
             return null;
         }
 
@@ -460,14 +458,12 @@ public String createQueue(String queueName) {
 
         // Method to send a message to the SQS queue with the relevant details
     public void sendSqsMessage(String queueUrl, String message) {
-       // System.out.println("trying to send message ");
         SendMessageRequest sendMessageRequest = SendMessageRequest.builder()
                 .queueUrl(queueUrl)
                 .messageBody(message)
                 .build();
 
                 sqs.sendMessage(sendMessageRequest);
-               // System.out.println("message sent");
     }
 
     public void releaseMessageToQueue(String queueUrl, String receiptHandle) {
@@ -483,7 +479,7 @@ public String createQueue(String queueName) {
             System.out.println("Message visibility reset, released back to queue.");
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("Error releasing message back to the queue.");
+            System.out.println("Error releasing message back to the queue.");
         }
     }
 
