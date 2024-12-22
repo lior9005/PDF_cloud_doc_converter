@@ -52,6 +52,11 @@ public class Manager {
                     //delete message from queue so the message will not be written again
                     aws.deleteMessageFromQueue(aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE), doneMessage.receiptHandle());
                     //update the map in order to know how many tasks left for file
+                    System.out.println("fileName" + parts[0]);
+                    System.out.println("map keys");
+                    for (Map.Entry<String, Integer> entry : fileProcessingCount.entrySet()) {
+                        System.out.println(entry.getKey() + " : " + entry.getValue());
+                    }
                     int tasksLeft = fileProcessingCount.get(parts[0]) - 1;
                     fileProcessingCount.put(parts[0], tasksLeft);
                     //if all tasks completed, send summaryfile to app queue
@@ -164,7 +169,6 @@ public class Manager {
     private void terminateAllWorkers() throws InterruptedException{
         List<Instance> workers = aws.getAllInstancesWithLabel(AWS.Label.Worker, true);
         for(Instance instance : workers){
-            String id = instance.instanceId();
             aws.terminateInstance(instance.instanceId());
         }
     }
