@@ -58,7 +58,7 @@ public class App {
     public void setup() {
         aws.createBucketIfNotExists(Resources.INPUT_BUCKET);
         aws.createBucketIfNotExists(Resources.OUTPUT_BUCKET);
-        //checkAndStartManagerNode();
+        checkAndStartManagerNode();
         // Initialize SQS queues
         initializeQueues();
     }
