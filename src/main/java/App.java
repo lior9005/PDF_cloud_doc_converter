@@ -7,9 +7,7 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.util.List;
 
@@ -68,7 +66,7 @@ public class App {
    public void checkAndStartManagerNode() {
     try {
         // Get all instances with the "Manager" label
-        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, true);
+        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, false);
                 
         if (managerInstances.isEmpty()) {
             System.out.println("Checking for running manager...");
