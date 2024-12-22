@@ -201,9 +201,15 @@ public class App {
                     String oldUrl = parts[1];
                     String newUrl = parts[2];
                     
+                    int index = newUrl.indexOf("result");
+                    String urlTitle = newUrl;
+                    if(index != -1){
+                        urlTitle = newUrl.substring(0, index + "result".length());
+                    }
+
                     writer.write("<p>" + operation + ": ");
-                    writer.write("<a href='" + oldUrl + "'>" + oldUrl + "</a>");
-                    writer.write(" <a href='" + newUrl + "'>" + newUrl + "</a>\n");
+                    writer.write("<a href='" + oldUrl + "'>" + oldUrl + "</a>\t");
+                    writer.write(" <a href='" + newUrl + "'>" + urlTitle + "</a>\n");
                 }
             }
     
