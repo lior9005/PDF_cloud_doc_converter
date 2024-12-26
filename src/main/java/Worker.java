@@ -145,8 +145,7 @@ public class Worker {
             }
             
             //upload the result to S3
-            aws.uploadFileToS3(outputKey, toUpload , Resources.A1_BUCKET);
-            newPath = aws.generatePresignedUrl(outputKey);
+            newPath = aws.uploadFileToS3(outputKey, toUpload , Resources.PUBLIC_BUCKET);
 
         } catch (IOException | IllegalArgumentException e) {
             return e.getMessage(); 

@@ -3,6 +3,7 @@ public class Resources {
 
     //buckets
     public static final String A1_BUCKET = "lior-ass1-bucket";
+    public static final String PUBLIC_BUCKET = "lior-ass1-public-bucket";
 
     //queues
     public static final String APP_TO_MANAGER_QUEUE = "appToManagerQueue";

@@ -57,6 +57,7 @@ public class App {
 
     public void setup() {
         aws.createBucketIfNotExists(Resources.A1_BUCKET);
+        aws.createPublicBucketIfNotExists(Resources.PUBLIC_BUCKET);
         checkAndStartManagerNode();
         initializeQueues();
     }

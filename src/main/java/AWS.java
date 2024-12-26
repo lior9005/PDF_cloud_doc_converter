@@ -293,6 +293,50 @@ public class AWS {
         }
     }
     
+    public void createPublicBucketIfNotExists(String bucketName) {
+        System.out.println("Creating Public Bucket " + bucketName + " if does not exist...");
+        try {
+            // Create the S3 bucket if it does not exist
+            s3.createBucket(CreateBucketRequest
+                    .builder()
+                    .bucket(bucketName)
+                    .createBucketConfiguration(
+                            CreateBucketConfiguration.builder()
+                                    .locationConstraint(BucketLocationConstraint.US_WEST_2)
+                                    .build())
+                    .build());
+    
+            // Wait for the bucket to be created
+            s3.waiter().waitUntilBucketExists(HeadBucketRequest.builder()
+                    .bucket(bucketName)
+                    .build());
+    
+            // Define the Bucket Policy to make the bucket public
+            String bucketPolicy = "{\n" +
+                    "  \"Version\": \"2012-10-17\",\n" +
+                    "  \"Statement\": [\n" +
+                    "    {\n" +
+                    "      \"Effect\": \"Allow\",\n" +
+                    "      \"Principal\": \"*\",\n" +
+                    "      \"Action\": \"s3:GetObject\",\n" +
+                    "      \"Resource\": \"arn:aws:s3:::" + bucketName + "/*\"\n" +
+                    "    }\n" +
+                    "  ]\n" +
+                    "}";
+    
+            // Set the bucket policy
+            PutBucketPolicyRequest putBucketPolicyRequest = PutBucketPolicyRequest.builder()
+                    .bucket(bucketName)
+                    .policy(bucketPolicy)
+                    .build();
+            s3.putBucketPolicy(putBucketPolicyRequest);
+    
+            System.out.println("Bucket Policy applied successfully. The bucket is now public.");
+    
+        } catch (S3Exception e) {
+            System.out.println(e.getMessage());
+        }
+    }
 
 
     public SdkIterable<S3Object> listObjectsInBucket(String bucketName) {
