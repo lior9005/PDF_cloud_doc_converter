@@ -16,6 +16,8 @@ public class Manager {
     private ExecutorService executorService; 
     private Map<String, Integer> fileProcessingCount = new ConcurrentHashMap<>();
     private Map<String, String> urlMap = new ConcurrentHashMap<>();
+    private ConcurrentLinkedQueue<Runnable> updateQueue = new ConcurrentLinkedQueue<>();
+
 
     public Manager() {
         this.executorService = Executors.newFixedThreadPool(2);
@@ -26,17 +28,20 @@ public class Manager {
         manager.run();
     }
 
-    //finished
     public void run() {
         try {
             while (true) {
-                // Step 1: Check the job queue for incoming messages
-                Message message = aws.getMessageFromQueue(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), 0);
+                // Process the update queue
+                Runnable updateTask;
+                while ((updateTask = updateQueue.poll()) != null) {
+                    updateTask.run();
+                }
 
+                // Check the job queue for incoming messages
+                Message message = aws.getMessageFromQueue(aws.getQueueUrl(Resources.APP_TO_MANAGER_QUEUE), 0);
                 if (message != null) {
-                    // Delete the job message from the job queue
                     aws.deleteMessageFromQueue(Resources.APP_TO_MANAGER_QUEUE, message.receiptHandle());
-                    if (message.body().equalsIgnoreCase("Terminate")) { /////////////////////////////
+                    if (message.body().equalsIgnoreCase("Terminate")) {
                         System.out.println("terminating...");
                         handleTerminateMessage();
                         break;
@@ -44,60 +49,48 @@ public class Manager {
                     submitMessageTask(message);
                 }
 
+                // Check for worker results
                 Message doneMessage = aws.getMessageFromQueue(aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE), 0);
                 if (doneMessage != null) {
-                    //divide message to outfileurl : actualmessage
                     String[] parts = doneMessage.body().split("\t", 2);
-                    //add message to the corresponding file
-                    appendToFile(parts);
-                    //delete message from queue so the message will not be written again
                     aws.deleteMessageFromQueue(aws.getQueueUrl(Resources.WORKER_TO_MANAGER_QUEUE), doneMessage.receiptHandle());
-                    //update the map in order to know how many tasks left for file
-                    System.out.println("fileName" + parts[0]);
-                    System.out.println("map keys");
-                    for (Map.Entry<String, Integer> entry : fileProcessingCount.entrySet()) {
-                        System.out.println(entry.getKey() + " : " + entry.getValue());
-                    }
-                    int tasksLeft = fileProcessingCount.get(parts[0]) - 1;
-                    fileProcessingCount.put(parts[0], tasksLeft);
-                    //if all tasks completed, send summaryfile to app queue
-                    if(fileProcessingCount.get(parts[0]) == 0){
-                        sendSummaryFile(parts[0]);
-                    }
+                    executorService.submit(() -> appendToFile(parts));
+                    updateQueue.add(() -> {
+                        int tasksLeft = fileProcessingCount.get(parts[0]) - 1;
+                        fileProcessingCount.put(parts[0], tasksLeft);
+                        if (tasksLeft == 0) {
+                            sendSummaryFile(parts[0], true);
+                        }
+                    });
                 }
-                Thread.sleep(1000);
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    //finished
-    private void submitMessageTask(Message message){
+    private void submitMessageTask(Message message) {
         executorService.submit(() -> {
-            try{
+            try {
                 String[] msgDetails = message.body().split("\t");
                 String inputfile = msgDetails[0];
                 int workerCount = Integer.parseInt(msgDetails[1]);
 
-                // Download the file and send tasks to the worker job queue.
                 File temp = new File(inputfile + "_tempInputFile");
-                aws.downloadFileFromS3(inputfile, temp, Resources.INPUT_BUCKET);
+                aws.downloadFileFromS3(inputfile, temp, Resources.A1_BUCKET);
 
                 File outputFile = new File(inputfile + "_tempOutputFile");
-                List<String> messages = new ArrayList<>();
-                messages = parseInputFile(temp, outputFile.getName());
-                fileProcessingCount.put(outputFile.getName(), messages.size());
-                urlMap.put(outputFile.getName(), inputfile);
-                
-                // Create worker nodes
-                int numWorkers = (int) Math.min(Math.ceil((double)messages.size()/workerCount), 9);
+                List<String> messages = parseInputFile(temp, outputFile.getName());
+
+                updateQueue.add(() -> {
+                    fileProcessingCount.put(outputFile.getName(), messages.size());
+                    urlMap.put(outputFile.getName(), inputfile);
+                });
+
+                int numWorkers = (int) Math.min(Math.ceil((double) messages.size() / workerCount), 9);
                 startWorkerNodes(numWorkers);
 
-                // Send tasks to worker queue.
                 sendMessages(messages, Resources.MANAGER_TO_WORKER_QUEUE);
-
-                // Delete temp file
                 deleteFile(temp);
             } catch (Exception e) {
                 e.printStackTrace();
@@ -126,45 +119,56 @@ public class Manager {
         }
     }
     
-    //finished
-    public void appendToFile(String[] parts) {
+    public synchronized void appendToFile(String[] parts) {
         // Create a File object for the HTML file
         File summaryFile = new File(parts[0]);
         // Use BufferedWriter to append content to the file
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(summaryFile, true))) {
             // Append the content at the end of the file
             writer.write(parts[1]);
-            writer.newLine();  // Optionally add a new line after the content
+            writer.newLine();
         } catch (IOException e) {
-            e.printStackTrace();  // Handle potential IO exceptions
+            e.printStackTrace();
         }
     }
     
-    //finished
-    public void sendSummaryFile(String fileName) {
+    public void sendSummaryFile(String fileName, boolean done) {
         try{
             // Create a File object for the HTML file
             File summaryS3File = new File(fileName);
             String originalFileUrl = urlMap.get(fileName);
             //Upload the summary to S3
-            String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, Resources.OUTPUT_BUCKET);
+            String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, Resources.A1_BUCKET);
             // Step 10: Send a message to the done queue: <originalFileName> \t <newFilePath>
-            aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), originalFileUrl + '\t' + summaryFilePath);
+            aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), originalFileUrl + '\t' + summaryFilePath + '\t' + done);
             // Delete temp summary file
             deleteFile(summaryS3File);
         } catch (Exception e) {
-            e.printStackTrace();  // Handle potential IO exceptions
+            e.printStackTrace();
         }
     }
 
-    //finished
     private void handleTerminateMessage() {
         System.out.println("Received termination request. Shutting down...");
-        executorService.shutdownNow();
+        executorService.shutdown();
         try {
             int currentWorkerCount = aws.getAllInstancesWithLabel(AWS.Label.Worker, true).size();
             List<String> terminateMessages = new ArrayList<>(Collections.nCopies(currentWorkerCount, "terminate"));
             sendMessages(terminateMessages, Resources.TERMINATE_QUEUE);
+
+            //for each undone task, send the partial summaryfile back to the local app, informing that the manager has been terminated.
+            for (Map.Entry<String, Integer> entry : fileProcessingCount.entrySet()) {
+                String key = entry.getKey();
+                Integer value = entry.getValue();
+                if (value > 0) {
+                    sendSummaryFile(key, false);
+                }
+            }
+
+            //purge (clean) all queues before terminating (except terminate_queue and manager_to_app_queue) 
+            purgeAllQueues();
+
+            //wait for the sqs to be empty -> meaning that all workers got the terminate message and stopped their tasks
             while (true) {
                 if (aws.getQueueSize(Resources.TERMINATE_QUEUE) == 0) {
                     System.out.println("Terminate Queue is empty. Terminating all workers...");
@@ -173,12 +177,19 @@ public class Manager {
                     aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager, true).get(0).instanceId());
                     break;
                 }
-                Thread.sleep(100); // Poll every 0.1 seconds
+                Thread.sleep(100); //check every 0.1 seconds
             }
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
     }
+
+    private void purgeAllQueues() {
+        aws.purgeQueue(Resources.APP_TO_MANAGER_QUEUE);
+        aws.purgeQueue(Resources.MANAGER_TO_WORKER_QUEUE);
+        aws.purgeQueue(Resources.WORKER_TO_MANAGER_QUEUE);
+    }
+
 
     private void terminateAllWorkers() throws InterruptedException{
         List<Instance> workers = aws.getAllInstancesWithLabel(AWS.Label.Worker, true);
@@ -187,7 +198,7 @@ public class Manager {
         }
     }
     
-    //update the startupscript that runs worker
+    //synchronized in order to prevent starting extra workers
     private synchronized void startWorkerNodes(int numWorkers) {
         try {
             List<Instance> runningInstances = aws.getAllInstancesWithLabel(AWS.Label.Worker, true);
@@ -195,8 +206,8 @@ public class Manager {
             if (currentWorkerCount < numWorkers) {
                 int workersToLaunch = numWorkers - currentWorkerCount;
                 String userDataScript = "#!/bin/bash\n" +
-                "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
-                "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
+                                        "aws s3 cp s3://" + Resources.A1_BUCKET + "/Ass_1-1.0-jar-with-dependencies.jar .\n" +
+                                        "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
                 for (int i = 0; i < workersToLaunch; i++) {
                     RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, userDataScript);
                     String InstanceId = response.instances().get(0).instanceId();
@@ -228,8 +239,8 @@ public class Manager {
                     System.out.println("Instance " + instance.instanceId() + " is unhealthy. Replacing...");
                     aws.terminateInstance(instance.instanceId());
                     String userDataScript = "#!/bin/bash\n" +
-                "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
-                "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
+                                            "aws s3 cp s3://" + Resources.A1_BUCKET + "/Ass_1-1.0-jar-with-dependencies.jar .\n" +
+                                            "java -cp Ass_1-1.0-jar-with-dependencies.jar Worker";
                 RunInstancesResponse response = aws.runInstanceFromAmiWithScript(aws.IMAGE_AMI, InstanceType.T2_NANO, 1, 1, userDataScript);
                 String InstanceId = response.instances().get(0).instanceId();
                 aws.addTag(InstanceId, "Worker");

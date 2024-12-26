@@ -2,11 +2,14 @@
 
 ## How the Program Works
 
+### Custom AMI - we made a custom ami for the assignment - which runs on Amazon Linux and has java installed.
+
 ### Local App
 The local application interacts with the system as follows:
 1. **Send Input File Location**: The app sends a message to the `app-to-manager` SQS, specifying the location of the input file on S3.
 2. **Retrieve Processed File**: It continuously checks the `manager-to-app` SQS for a message containing the summary file's location.
    - If the file name matches the original input file, the app downloads the summary file, converts it to HTML, and saves it locally.
+   - If the last word in the message indicates if the summary file received is partial (meaning the manager was terminated) or full.
    - If no matching message is found, it continues polling the queue.
 3. **Termination (Optional)**: If the `-t` flag is provided, the app sends a termination message to the `app-to-manager` SQS.
 
@@ -19,6 +22,7 @@ The manager orchestrates tasks and resources using the following components:
     - Downloads input files from S3.
     - Extracts tasks from each file.
     - Updates hash maps and sends task messages to the `manager-to-worker SQS` queue.
+    - Appends the messages to the temp output file.
 - **Message Handling**:
   1. Reads messages from the `app-to-manager SQS` queue.
      - If a termination message is received, the manager:
@@ -29,6 +33,7 @@ The manager orchestrates tasks and resources using the following components:
      - Updates the corresponding summary file and decrements the task count in `fileProcessingCount`.
      - When all tasks for a file are complete, sends the summary file path to the `manager-to-app SQS` queue.
   3. Continuously loops to handle messages as described above.
+  4. If terminated - before final termination, gracefully terminates all worker nodes, purges relevant queues and sends to all other local apps waiting for results a partial summary file with the finished tasks.
 
 ### Worker
 The worker processes tasks as follows:
@@ -57,12 +62,11 @@ The worker processes tasks as follows:
 - **Manager Node**: Uses `t2.micro` for sufficient computational power to manage tasks using a main thread and a thread pool.
 - **Worker Node**: Uses `t2.nano` for cost-effective execution of single linear tasks.
 
-Both nodes are built from a custom Linux AMI with Java and PDFBox pre-installed. Each node runs a startup script to download the assignment JAR file from S3 and execute the relevant class.
+Both nodes are built from a custom Linux AMI with Java pre-installed. Each node runs a startup script to download the assignment JAR file from S3 and execute the relevant class.
 Also, each node initialized with a specific IAM role called ("labRole") which grants the relevant permission to execute the task.
 
 ### S3
-- **Input Bucket**: Stores files uploaded by local apps for the manager to process.
-- **Output Bucket**: Stores processed files and summary files for the local app to retrieve.
+- **Assignment Bucket**: Stores all files.
 
 ### SQS
 - **Queues**:
@@ -77,6 +81,14 @@ Also, each node initialized with a specific IAM role called ("labRole") which gr
 ## Performance and Scalability
 
 ### Runtime and Task Distribution
+- Actual Runtime 4:16 minutes:
+   - Ran 2 local apps with the 2 input files and 'n' value of 1
+      - File 1: 2500 lines
+      - File 2: 100 lines
+   - 9 ec2 instances:
+      - 1 manager with 2 thread in the thread pool
+      - 8 workers
+
 - **Tasks Per Worker (`n`)**:
   - Smaller `n` values distribute tasks across more workers, reducing runtime but increasing costs.
   - For this assignment, `n=1` was used, maximizing the number of active workers (up to 9).
@@ -120,6 +132,8 @@ Also, each node initialized with a specific IAM role called ("labRole") which gr
 1. The local app sends a termination message via the `app-to-manager` SQS.
 2. The manager:
    - Sends termination messages to all active workers via the `terminate` SQS.
+   - Purges all queues (except terminate queue and manager to app queue)
+   - Sends to all apps waiting their partial summary file with a relevant flag to inform that the file is partial and was send due to termination
    - Waits for the queue to empty, ensuring all workers have stopped.
 3. Workers check the `terminate` SQS after each task. Upon receiving a termination message, they shut down gracefully.
 4. Once all workers have terminated, the manager shuts down itself.
@@ -137,7 +151,4 @@ Also, each node initialized with a specific IAM role called ("labRole") which gr
 ## Worker Load Distribution
 Workers process tasks fairly by pulling messages from the queue as they become available. Task distribution depends on queue availability and worker speed, ensuring efficient resource use.
 
-
-
 ----------------------------------------------------------------------------------------------------------------------------------------
-how much time it took the program to run - left to do

@@ -20,6 +20,7 @@ import software.amazon.awssdk.services.sqs.model.GetQueueAttributesResponse;
 import software.amazon.awssdk.services.sqs.model.GetQueueUrlRequest;
 import software.amazon.awssdk.services.sqs.model.GetQueueUrlResponse;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.PurgeQueueRequest;
 import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
 import software.amazon.awssdk.services.sqs.model.QueueDoesNotExistException;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
@@ -38,7 +39,7 @@ import java.util.stream.Collectors;
 
 public class AWS {
 
-    public final String IMAGE_AMI = "ami-054c83d4f87978fed";
+    public final String IMAGE_AMI = "ami-0e338d65c027b1b94";
     public static Region region1 = Region.US_EAST_1;
     public static Region region2 = Region.US_WEST_2;
     private final S3Client s3;
@@ -356,7 +357,7 @@ public class AWS {
             .build()) {
         // Set up the request to get the object from S3
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                .bucket(Resources.OUTPUT_BUCKET)
+                .bucket(Resources.A1_BUCKET)
                 .key(objectKey)
                 .build();
 
@@ -459,6 +460,14 @@ public String createQueue(String queueName) {
                 .build();
 
         sqs.deleteMessage(deleteMessageRequest);
+    }
+
+    public void purgeQueue(String queueUrl) {
+        PurgeQueueRequest purgeQueueRequest = PurgeQueueRequest.builder()
+                .queueUrl(queueUrl)
+                .build();
+
+        sqs.purgeQueue(purgeQueueRequest);
     }
 
     public Message getMessageFromQueue(String queueUrl, int visibilityTimeout) {

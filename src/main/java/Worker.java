@@ -23,7 +23,7 @@ public class Worker {
 
     public void run() {
         while (!shouldTerminate()) {
-            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 20);
+            Message msg = aws.getMessageFromQueue(Resources.MANAGER_TO_WORKER_QUEUE, 60);
             if(msg == null) {
                 try {
                     Thread.sleep(1000);
@@ -63,7 +63,8 @@ public class Worker {
             }
 
         } catch (Exception e) {
-            e.printStackTrace(); // Log the error
+            String errorMessage = e.getMessage() != null ? e.getMessage() : "An unknown error occurred.";
+            aws.sendSqsMessage(Resources.WORKER_TO_MANAGER_QUEUE, inputMessage + '\t' + "Error: " + errorMessage);
         }
     }
     
@@ -77,7 +78,7 @@ public class Worker {
         return false;
     }
     
-// Method to download the PDF from the given URL
+    //download the PDF from the given URL
     private String downloadPdf(String pdfUrl) throws IOException {
         URL url;
         try {
@@ -144,32 +145,26 @@ public class Worker {
             }
             
             //upload the result to S3
-            aws.uploadFileToS3(outputKey, toUpload , Resources.OUTPUT_BUCKET);
+            aws.uploadFileToS3(outputKey, toUpload , Resources.A1_BUCKET);
             newPath = aws.generatePresignedUrl(outputKey);
 
         } catch (IOException | IllegalArgumentException e) {
             return e.getMessage(); 
-        } finally {
-            // Clean up by deleting the file if it exists
-          //  if (new File(convertedFilePath) != null && new File(convertedFilePath).exists()) {
-         //       new File(convertedFilePath).delete();
-           // }
         }
         return newPath;
     }
 
-    // Method to convert PDF to image
+    //convert PDF to image
     public static void convertToImage(File pdfFile, String outputFilePath) throws IOException {
         try (PDDocument document = PDDocument.load(pdfFile)) {
             PDFRenderer renderer = new PDFRenderer(document);
-            BufferedImage image = renderer.renderImage(0); // Render the first page
-    
-            // Write directly to the output file
+            BufferedImage image = renderer.renderImage(0);
+
             ImageIO.write(image, "PNG", new File(outputFilePath));
         }
     }
 
-    // Method to convert PDF to HTML
+    //convert PDF to HTML
     public static void convertToHtml(File pdfFile, String outputFilePath) throws IOException {
         try (PDDocument document = PDDocument.load(pdfFile)) {
             PDFTextStripper stripper = new PDFTextStripper();
@@ -183,7 +178,7 @@ public class Worker {
         }
     }
     
-    // Method to convert PDF to text
+    //convert PDF to text
     public static void convertToText(File pdfFile,String outputFilePath) throws IOException {
         try (PDDocument document = PDDocument.load(pdfFile)) {
             PDFTextStripper stripper = new PDFTextStripper();
