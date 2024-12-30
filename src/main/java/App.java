@@ -18,7 +18,8 @@ public class App {
     private File summaryFile;
     private String inFilePath = "";
 
-    public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate - optional)]
+    // args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate - optional)]
+    public static void main(String[] args) {
         if(args.length < 3) {
             System.out.println("Invalid start script - missing variables");
         }
@@ -153,7 +154,6 @@ public class App {
                     //messageParts[0] = originalURL ; messageParts[1] = summaryfileURL
                     String[] messageParts = message.split("\t");
                     if (messageParts[0].equals(inFilePath)) {
-                        System.out.println(message);
                         if (messageParts.length == 3) {    
                             if(messageParts[2].equals("false")){
                                 System.out.println("Manager was terminated by another app, output file recieved is partial");

@@ -139,7 +139,7 @@ public class Manager {
             String originalFileUrl = urlMap.get(fileName);
             //Upload the summary to S3
             String summaryFilePath = aws.uploadFileToS3(fileName, summaryS3File, Resources.A1_BUCKET);
-            // Step 10: Send a message to the done queue: <originalFileName> \t <newFilePath>
+            //Send a message to the done queue: <originalFileName> \t <newFilePath>
             aws.sendSqsMessage(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), originalFileUrl + '\t' + summaryFilePath + '\t' + done);
             // Delete temp summary file
             deleteFile(summaryS3File);
@@ -177,7 +177,7 @@ public class Manager {
                     aws.terminateInstance(aws.getAllInstancesWithLabel(AWS.Label.Manager, true).get(0).instanceId());
                     break;
                 }
-                Thread.sleep(100); //check every 0.1 seconds
+                Thread.sleep(100);
             }
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -224,7 +224,6 @@ public class Manager {
         try (BufferedReader reader = Files.newBufferedReader(inputFile.toPath())) {
             String line;
             while ((line = reader.readLine()) != null) {
-                // Add message to list
                 parsedMessages.add(fileName + '\t' + line);
             }
         }

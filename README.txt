@@ -9,7 +9,7 @@ The local application interacts with the system as follows:
 1. **Send Input File Location**: The app sends a message to the `app-to-manager` SQS, specifying the location of the input file on S3.
 2. **Retrieve Processed File**: It continuously checks the `manager-to-app` SQS for a message containing the summary file's location.
    - If the file name matches the original input file, the app downloads the summary file, converts it to HTML, and saves it locally.
-   - If the last word in the message indicates if the summary file received is partial (meaning the manager was terminated) or full.
+   - If the last word in the message indicates if the summary file received is partial (meaning the manager was terminated) or full (meaning the manager finished all tasks).
    - If no matching message is found, it continues polling the queue.
 3. **Termination (Optional)**: If the `-t` flag is provided, the app sends a termination message to the `app-to-manager` SQS.
 
@@ -39,7 +39,7 @@ The manager orchestrates tasks and resources using the following components:
 The worker processes tasks as follows:
 1. Reads messages from the `manager-to-worker SQS` queue.
    - If the message is a termination command, the worker deletes it from the queue and shuts down.
-   - If not, the worker downloads the specified file, processes it, and uploads the result to S3.
+   - If not, the worker downloads the specified file, processes it, and uploads the result to a public S3 bucket.
 2. Sends the result's file path to the `worker-to-manager SQS` queue.
 3. Repeats the process until terminated.
 
@@ -66,7 +66,9 @@ Both nodes are built from a custom Linux AMI with Java pre-installed. Each node 
 Also, each node initialized with a specific IAM role called ("labRole") which grants the relevant permission to execute the task.
 
 ### S3
-- **Assignment Bucket**: Stores all files.
+- **A1_BUCKET**: used for communication between instances.
+- **PUBLIC_BUCKET**: used for uploading the converted tasks.
+
 
 ### SQS
 - **Queues**:

@@ -70,7 +70,7 @@ public class Worker {
     
 
     public boolean shouldTerminate() {
-        Message msg = aws.getMessageFromQueue(Resources.TERMINATE_QUEUE, 1);
+        Message msg = aws.getMessageFromQueue(Resources.TERMINATE_QUEUE, 5);
         if(msg != null) {
             aws.deleteMessageFromQueue(Resources.TERMINATE_QUEUE, msg.receiptHandle());
             return true;

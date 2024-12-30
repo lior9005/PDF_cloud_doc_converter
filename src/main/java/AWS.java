@@ -294,7 +294,7 @@ public class AWS {
     }
     
     public void createPublicBucketIfNotExists(String bucketName) {
-        System.out.println("Creating Public Bucket " + bucketName + " if does not exist...");
+        System.out.println("Creating Bucket " + bucketName + " if does not exist...");
         try {
             // Create the S3 bucket if it does not exist
             s3.createBucket(CreateBucketRequest
@@ -311,15 +311,23 @@ public class AWS {
                     .bucket(bucketName)
                     .build());
     
-            // Define the Bucket Policy to make the bucket public
+            // Define the Bucket Policy to allow EC2 instances in the current AWS account to access objects in the bucket
             String bucketPolicy = "{\n" +
                     "  \"Version\": \"2012-10-17\",\n" +
                     "  \"Statement\": [\n" +
                     "    {\n" +
+                    "      \"Sid\": \"ListObjectsInBucket\",\n" +
                     "      \"Effect\": \"Allow\",\n" +
                     "      \"Principal\": \"*\",\n" +
-                    "      \"Action\": \"s3:GetObject\",\n" +
-                    "      \"Resource\": \"arn:aws:s3:::" + bucketName + "/*\"\n" +
+                    "      \"Action\": [\"s3:ListBucket\"],\n" +
+                    "      \"Resource\": [\"arn:aws:s3:::" + bucketName + "\"]\n" +
+                    "    },\n" +
+                    "    {\n" +
+                    "      \"Sid\": \"AllObjectActions\",\n" +
+                    "      \"Effect\": \"Allow\",\n" +
+                    "      \"Principal\": \"*\",\n" +
+                    "      \"Action\": \"s3:*Object\",\n" +
+                    "      \"Resource\": [\"arn:aws:s3:::" + bucketName + "/*\"]\n" +
                     "    }\n" +
                     "  ]\n" +
                     "}";
@@ -331,7 +339,7 @@ public class AWS {
                     .build();
             s3.putBucketPolicy(putBucketPolicyRequest);
     
-            System.out.println("Bucket Policy applied successfully. The bucket is now public.");
+            System.out.println("Bucket Policy applied successfully.");
     
         } catch (S3Exception e) {
             System.out.println(e.getMessage());
@@ -561,6 +569,7 @@ public String createQueue(String queueName) {
             System.out.println("Error releasing message back to the queue.");
         }
     }
+    
 
     ///////////////////////
 
