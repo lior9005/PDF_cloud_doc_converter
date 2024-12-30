@@ -7,6 +7,8 @@ import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.ChangeMessageVisibilityRequest;
 import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
@@ -18,6 +20,7 @@ import software.amazon.awssdk.services.sqs.model.GetQueueAttributesResponse;
 import software.amazon.awssdk.services.sqs.model.GetQueueUrlRequest;
 import software.amazon.awssdk.services.sqs.model.GetQueueUrlResponse;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.PurgeQueueRequest;
 import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
 import software.amazon.awssdk.services.sqs.model.QueueDoesNotExistException;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
@@ -29,12 +32,14 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URL;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class AWS {
 
-    public final String IMAGE_AMI = "ami-054c83d4f87978fed";
+    public final String IMAGE_AMI = "ami-0e338d65c027b1b94";
     public static Region region1 = Region.US_EAST_1;
     public static Region region2 = Region.US_WEST_2;
     private final S3Client s3;
@@ -288,6 +293,58 @@ public class AWS {
         }
     }
     
+    public void createPublicBucketIfNotExists(String bucketName) {
+        System.out.println("Creating Bucket " + bucketName + " if does not exist...");
+        try {
+            // Create the S3 bucket if it does not exist
+            s3.createBucket(CreateBucketRequest
+                    .builder()
+                    .bucket(bucketName)
+                    .createBucketConfiguration(
+                            CreateBucketConfiguration.builder()
+                                    .locationConstraint(BucketLocationConstraint.US_WEST_2)
+                                    .build())
+                    .build());
+    
+            // Wait for the bucket to be created
+            s3.waiter().waitUntilBucketExists(HeadBucketRequest.builder()
+                    .bucket(bucketName)
+                    .build());
+    
+            // Define the Bucket Policy to allow EC2 instances in the current AWS account to access objects in the bucket
+            String bucketPolicy = "{\n" +
+                    "  \"Version\": \"2012-10-17\",\n" +
+                    "  \"Statement\": [\n" +
+                    "    {\n" +
+                    "      \"Sid\": \"ListObjectsInBucket\",\n" +
+                    "      \"Effect\": \"Allow\",\n" +
+                    "      \"Principal\": \"*\",\n" +
+                    "      \"Action\": [\"s3:ListBucket\"],\n" +
+                    "      \"Resource\": [\"arn:aws:s3:::" + bucketName + "\"]\n" +
+                    "    },\n" +
+                    "    {\n" +
+                    "      \"Sid\": \"AllObjectActions\",\n" +
+                    "      \"Effect\": \"Allow\",\n" +
+                    "      \"Principal\": \"*\",\n" +
+                    "      \"Action\": \"s3:*Object\",\n" +
+                    "      \"Resource\": [\"arn:aws:s3:::" + bucketName + "/*\"]\n" +
+                    "    }\n" +
+                    "  ]\n" +
+                    "}";
+    
+            // Set the bucket policy
+            PutBucketPolicyRequest putBucketPolicyRequest = PutBucketPolicyRequest.builder()
+                    .bucket(bucketName)
+                    .policy(bucketPolicy)
+                    .build();
+            s3.putBucketPolicy(putBucketPolicyRequest);
+    
+            System.out.println("Bucket Policy applied successfully.");
+    
+        } catch (S3Exception e) {
+            System.out.println(e.getMessage());
+        }
+    }
 
 
     public SdkIterable<S3Object> listObjectsInBucket(String bucketName) {
@@ -346,6 +403,28 @@ public class AWS {
         deleteEmptyBucket(bucketName);
     }
 
+    public String generatePresignedUrl(String objectKey) {
+        try (S3Presigner presigner = S3Presigner.builder()
+            .region(region2) // Set region here
+            .build()) {
+        // Set up the request to get the object from S3
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(Resources.A1_BUCKET)
+                .key(objectKey)
+                .build();
+
+        // Generate the presigned URL
+        PresignedGetObjectRequest presignedRequest = presigner.presignGetObject(r -> r.getObjectRequest(getObjectRequest)
+                .signatureDuration(Duration.ofMinutes(10))); // URL valid for 10 minutes
+
+        // Return the presigned URL as a string
+        URL url = presignedRequest.url();
+        return url.toString();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "Error generating presigned URL: " + e.getMessage();
+        }
+    }
     //////////////////////////////////////////////SQS
 
     /**
@@ -435,6 +514,14 @@ public String createQueue(String queueName) {
         sqs.deleteMessage(deleteMessageRequest);
     }
 
+    public void purgeQueue(String queueUrl) {
+        PurgeQueueRequest purgeQueueRequest = PurgeQueueRequest.builder()
+                .queueUrl(queueUrl)
+                .build();
+
+        sqs.purgeQueue(purgeQueueRequest);
+    }
+
     public Message getMessageFromQueue(String queueUrl, int visibilityTimeout) {
 
         // Create the receive message request
@@ -482,6 +569,7 @@ public String createQueue(String queueName) {
             System.out.println("Error releasing message back to the queue.");
         }
     }
+    
 
     ///////////////////////
 

@@ -2,8 +2,8 @@
 public class Resources {
 
     //buckets
-    public static final String INPUT_BUCKET = "eden-input-test-bucket";
-    public static final String OUTPUT_BUCKET = "eden-output-test-bucket";
+    public static final String A1_BUCKET = "lior-ass1-bucket";
+    public static final String PUBLIC_BUCKET = "lior-ass1-public-bucket";
 
     //queues
     public static final String APP_TO_MANAGER_QUEUE = "appToManagerQueue";

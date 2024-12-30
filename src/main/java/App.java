@@ -18,7 +18,8 @@ public class App {
     private File summaryFile;
     private String inFilePath = "";
 
-    public static void main(String[] args) {// args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate, optional)]
+    // args = [inFilePath, outFilePath, tasksPerWorker, -t (terminate - optional)]
+    public static void main(String[] args) {
         if(args.length < 3) {
             System.out.println("Invalid start script - missing variables");
         }
@@ -56,43 +57,48 @@ public class App {
     }
 
     public void setup() {
-        aws.createBucketIfNotExists(Resources.INPUT_BUCKET);
-        aws.createBucketIfNotExists(Resources.OUTPUT_BUCKET);
+        aws.createBucketIfNotExists(Resources.A1_BUCKET);
+        aws.createPublicBucketIfNotExists(Resources.PUBLIC_BUCKET);
         checkAndStartManagerNode();
-        // Initialize SQS queues
         initializeQueues();
     }
 
-   public void checkAndStartManagerNode() {
-    try {
-        // Get all instances with the "Manager" label
-        List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, false);
-                
-        if (managerInstances.isEmpty()) {
+    public void checkAndStartManagerNode() {
+        try {
             System.out.println("Checking for running manager...");
-            startManagerNode();  // No manager is running, start a new one
-        } else {
-            // Fetch the instance ID of the running manager node
-            String managerInstanceId = managerInstances.stream()
-                .filter(instance -> instance.state().name() == InstanceStateName.RUNNING)
-                .map(Instance::instanceId)
-                .findFirst()
-                .orElse(null);
-            System.out.println("Manager node is already running with ID: " + managerInstanceId);
-        }
-
-    } catch (Exception e) {
-        e.printStackTrace();
-        System.out.println("Error checking Manager node status.");
-    }
-}
     
-    // Modify the startManagerNode method
+            // Get all instances with the "Manager" label
+            List<Instance> managerInstances = aws.getAllInstancesWithLabel(AWS.Label.Manager, false);
+    
+            boolean hasActiveManager = managerInstances.stream()
+                .anyMatch(instance -> {
+                    InstanceStateName stateName = instance.state().name();
+                    return stateName == InstanceStateName.RUNNING || stateName == InstanceStateName.PENDING;
+                });
+    
+            if (!hasActiveManager) {
+                startManagerNode(); // No active manager, start a new one
+            } else {
+                // Fetch the instance ID of the running or initializing manager node
+                String managerInstanceId = managerInstances.stream()
+                    .filter(instance -> instance.state().name() == InstanceStateName.RUNNING || instance.state().name() == InstanceStateName.PENDING)
+                    .map(Instance::instanceId)
+                    .findFirst()
+                    .orElse(null);
+                System.out.println("Manager node is already running or initializing with ID: " + managerInstanceId);
+            }
+    
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.out.println("Error checking Manager node status.");
+        }
+    }
+    
     public void startManagerNode() {
         try {
             InstanceType instanceType = InstanceType.T2_MICRO;
             String userDataScript = "#!/bin/bash\n" +
-                                    "aws s3 cp s3://eden-input-test-bucket/Ass_1-1.0-jar-with-dependencies.jar .\n" +
+                                    "aws s3 cp s3://" + Resources.A1_BUCKET + "/Ass_1-1.0-jar-with-dependencies.jar .\n" +
                                     "java -cp Ass_1-1.0-jar-with-dependencies.jar Manager";
     
             // Launch manager node with a specific AMI and instance type
@@ -116,7 +122,7 @@ public class App {
                 throw new IllegalArgumentException("File does not exist.");
             }
             // Upload file to S3
-            s3OriginalURL = aws.uploadFileToS3(inFilePath, file, Resources.INPUT_BUCKET);
+            s3OriginalURL = aws.uploadFileToS3(inFilePath, file, Resources.A1_BUCKET);
             System.out.println("File uploaded to S3 at: " + s3OriginalURL);
 
         } catch (Exception e) {
@@ -125,7 +131,6 @@ public class App {
         }
     }
 
-    // Method to initialize the SQS queues if needed
     public void initializeQueues() {
         aws.createQueue(Resources.APP_TO_MANAGER_QUEUE);
         aws.createQueue(Resources.MANAGER_TO_APP_QUEUE);
@@ -149,9 +154,12 @@ public class App {
                     //messageParts[0] = originalURL ; messageParts[1] = summaryfileURL
                     String[] messageParts = message.split("\t");
                     if (messageParts[0].equals(inFilePath)) {
-                        if (messageParts.length == 2) {    
+                        if (messageParts.length == 3) {    
+                            if(messageParts[2].equals("false")){
+                                System.out.println("Manager was terminated by another app, output file recieved is partial");
+                            }
                             //download summary file
-                            aws.downloadFileFromS3(inFilePath + "_tempOutputFile", summaryFile, Resources.OUTPUT_BUCKET); 
+                            aws.downloadFileFromS3(inFilePath + "_tempOutputFile", summaryFile, Resources.A1_BUCKET); 
                             // Mark the operation as complete
                             downloadCompleted = true;
                             // Delete the message from the queue
@@ -161,13 +169,10 @@ public class App {
                             System.out.println("Invalid message format. Skipping...");
                             aws.releaseMessageToQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), msg.receiptHandle());
                         }
-                    } else {
-                        // Release the message back to the queue for other apps
-                        //aws.releaseMessageToQueue(aws.getQueueUrl(Resources.MANAGER_TO_APP_QUEUE), msg.receiptHandle());
                     }
                 }
                 else{
-                    Thread.sleep(1000);
+                    Thread.sleep(100);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -178,8 +183,6 @@ public class App {
 
     private void createHtmlFromDownloadedFile(String outFilePath) throws Exception {
         File htmlFile = new File(outFilePath);
-    
-        // Create a BufferedReader to read the input file
         try (BufferedReader reader = Files.newBufferedReader(summaryFile.toPath());
              BufferedWriter writer = Files.newBufferedWriter(htmlFile.toPath())) {
     
@@ -193,9 +196,15 @@ public class App {
                     String oldUrl = parts[1];
                     String newUrl = parts[2];
                     
+                    int index = newUrl.indexOf("result");
+                    String urlTitle = newUrl;
+                    if(index != -1){
+                        urlTitle = newUrl.substring(0, index + "result".length());
+                    }
+
                     writer.write("<p>" + operation + ": ");
-                    writer.write("<a href='" + oldUrl + "'>" + oldUrl + "</a>");
-                    writer.write(" <a href='" + newUrl + "'>" + newUrl + "</a>\n");
+                    writer.write("<a href='" + oldUrl + "'>" + oldUrl + "</a>\t");
+                    writer.write(" <a href='" + newUrl + "'>" + urlTitle + "</a>\n");
                 }
             }
     
